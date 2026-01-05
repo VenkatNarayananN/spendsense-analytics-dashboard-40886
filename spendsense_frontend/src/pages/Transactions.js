@@ -1,20 +1,29 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Card } from "../components/ui";
 import { DateRangePicker, EmptyState, ErrorState, FilterBar, MultiSelect, SkeletonTable } from "../components/ux";
 import ToastNotice from "../components/ToastNotice";
 import { fetchTransactionsSummary } from "../lib/data/dashboardData";
 import { useTransactionsRealtime } from "../hooks/useTransactionsRealtime";
+import { fetchTransactionsPageFromSupabase } from "../lib/data/supabaseQueries";
 
 function formatAmount(amount) {
   const n = Number(amount);
   if (!Number.isFinite(n)) return "-$—";
-  const sign = n > 0 ? "-" : ""; // spend is often positive in DB; UI shows negative.
+  // Seed data uses negative for expenses; show sign explicitly.
+  const sign = n < 0 ? "-" : "+";
   return `${sign}$${Math.abs(n).toFixed(2)}`;
+}
+
+function safeDateLabel(isoOrDate) {
+  if (!isoOrDate) return "—";
+  const d = new Date(isoOrDate);
+  if (Number.isNaN(d.getTime())) return String(isoOrDate).slice(0, 10);
+  return d.toISOString().slice(0, 10);
 }
 
 // PUBLIC_INTERFACE
 export default function Transactions() {
-  /** Transactions page: filter bar + transaction table placeholder with robust UX states (local state only). */
+  /** Transactions page: Supabase-backed list with pagination + basic filters; realtime INSERTs trigger refresh. */
 
   const CATEGORY_OPTIONS = useMemo(
     () => [
@@ -22,7 +31,15 @@ export default function Transactions() {
       { value: "Groceries", label: "Groceries" },
       { value: "Transport", label: "Transport" },
       { value: "Subscriptions", label: "Subscriptions" },
-      { value: "Shopping", label: "Shopping" }
+      { value: "Shopping", label: "Shopping" },
+      { value: "Coffee", label: "Coffee" },
+      { value: "Utilities", label: "Utilities" },
+      { value: "Phone", label: "Phone" },
+      { value: "Internet", label: "Internet" },
+      { value: "Health", label: "Health" },
+      { value: "Fitness", label: "Fitness" },
+      { value: "Entertainment", label: "Entertainment" },
+      { value: "Travel", label: "Travel" }
     ],
     []
   );
@@ -35,71 +52,76 @@ export default function Transactions() {
     search: ""
   });
 
-  // Demo-only UI states (no real fetch yet).
-  const [uiState, setUiState] = useState("ready"); // "loading" | "empty" | "error" | "ready"
+  // Live paging state
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(15);
 
-  // Placeholder in-memory list (so realtime can append/prepend without requiring real fetch wiring).
-  const [transactions, setTransactions] = useState([
-    {
-      id: "seed-1",
-      date: "2026-01-05",
-      merchant: "Silver Streaming",
-      category: "Subscriptions",
-      amount: 12.99,
-      flag: "Review"
-    },
-    {
-      id: "seed-2",
-      date: "2026-01-04",
-      merchant: "Rose Market",
-      category: "Groceries",
-      amount: 96.72,
-      flag: "—"
-    },
-    {
-      id: "seed-3",
-      date: "2026-01-03",
-      merchant: "Ocean Café",
-      category: "Dining",
-      amount: 18.4,
-      flag: "OK"
-    }
-  ]);
-
+  const [listState, setListState] = useState({ loading: true, error: null, rows: [], total: 0 });
   const [summary, setSummary] = useState({
-    totalSpendFiltered: "$1,204.33",
-    averageTransaction: "$24.09"
+    totalSpendFiltered: "$0.00",
+    averageTransaction: "$0.00"
   });
+
+  const refreshList = useCallback(
+    async (opts = {}) => {
+      const nextPage = opts.page ?? page;
+      try {
+        setListState((p) => ({ ...p, loading: true, error: null }));
+        const res = await fetchTransactionsPageFromSupabase({
+          allowDemoUser: true,
+          page: nextPage,
+          pageSize,
+          filters
+        });
+
+        setListState({
+          loading: false,
+          error: null,
+          rows: res.rows || [],
+          total: res.total || 0
+        });
+      } catch (e) {
+        setListState((p) => ({
+          ...p,
+          loading: false,
+          error: e?.message || String(e)
+        }));
+      }
+    },
+    [filters, page, pageSize]
+  );
 
   const refreshSummaries = useCallback(async () => {
     try {
-      const next = await fetchTransactionsSummary();
+      const next = await fetchTransactionsSummary(filters);
       setSummary(next);
     } catch (e) {
       // eslint-disable-next-line no-console
-      console.warn("[SpendSense] Failed to refresh transaction summaries (placeholder).", e);
+      console.warn("[SpendSense] Failed to refresh transaction summaries.", e);
     }
-  }, []);
+  }, [filters]);
 
-  const { notice } = useTransactionsRealtime({
-    onInsert: (tx) => {
-      // Only update the in-memory list when list is "mounted"/visible (ready state).
-      if (uiState !== "ready") return;
-      if (!tx) return;
-
-      const next = {
-        id: tx.id ?? tx.transaction_id ?? `rt-${Date.now()}`,
-        date: String(tx.date || "").slice(0, 10) || new Date().toISOString().slice(0, 10),
-        merchant: tx.merchant ?? "New transaction",
-        category: tx.category ?? "—",
-        amount: tx.amount ?? null,
-        flag: "New"
-      };
-
-      setTransactions((prev) => [next, ...prev].slice(0, 12));
+  const refreshAll = useCallback(
+    async (opts = {}) => {
+      await Promise.all([refreshList(opts), refreshSummaries()]);
     },
-    onRefreshRequested: refreshSummaries
+    [refreshList, refreshSummaries]
+  );
+
+  // Initial + whenever filters/page changes
+  useEffect(() => {
+    refreshAll({ page });
+  }, [page, refreshAll]);
+
+  // Realtime hook: on INSERT refresh list + summaries.
+  const { notice } = useTransactionsRealtime({
+    onRefreshRequested: () => refreshAll({ page: 1 })
   });
+
+  // When filters change, reset to page 1 (and refetch).
+  useEffect(() => {
+    setPage(1);
+  }, [filters.dateRange?.from, filters.dateRange?.to, filters.search, filters.amountMin, filters.amountMax, filters.categories]);
 
   const onClearAll = () => {
     setFilters({ dateRange: { from: "", to: "" }, categories: [], amountMin: "", amountMax: "", search: "" });
@@ -130,6 +152,14 @@ export default function Transactions() {
     };
   }, [filters]);
 
+  const totalPages = useMemo(() => {
+    const t = Number(listState.total) || 0;
+    return t > 0 ? Math.ceil(t / pageSize) : 1;
+  }, [listState.total, pageSize]);
+
+  const canPrev = page > 1 && !listState.loading;
+  const canNext = page < totalPages && !listState.loading;
+
   return (
     <>
       <ToastNotice message={notice} />
@@ -145,12 +175,7 @@ export default function Transactions() {
       </div>
 
       <div className="Grid" style={{ gap: 14 }}>
-        <FilterBar
-          title="Transaction Filters"
-          filters={filters}
-          onClearAll={onClearAll}
-          onRemoveFilter={onRemoveFilter}
-        >
+        <FilterBar title="Transaction Filters" filters={filters} onClearAll={onClearAll} onRemoveFilter={onRemoveFilter}>
           <DateRangePicker value={filters.dateRange} onChange={(dateRange) => setFilters((p) => ({ ...p, dateRange }))} />
 
           <MultiSelect
@@ -166,11 +191,12 @@ export default function Transactions() {
             <input
               className="NumberInput"
               inputMode="decimal"
-              placeholder="0.00"
+              placeholder="-500.00"
               value={filters.amountMin}
               onChange={(e) => setFilters((p) => ({ ...p, amountMin: e.target.value }))}
               aria-label="Minimum amount"
             />
+            <div className="FieldHelp">Tip: seed expenses are negative. Example: -50</div>
           </div>
 
           <div className="Field" style={{ minWidth: 180 }}>
@@ -178,7 +204,7 @@ export default function Transactions() {
             <input
               className="NumberInput"
               inputMode="decimal"
-              placeholder="500.00"
+              placeholder="0.00"
               value={filters.amountMax}
               onChange={(e) => setFilters((p) => ({ ...p, amountMax: e.target.value }))}
               aria-label="Maximum amount"
@@ -189,30 +215,17 @@ export default function Transactions() {
             <div className="FieldLabel">Search</div>
             <input
               className="TextInput"
-              placeholder="Merchant, memo, category…"
+              placeholder="Merchant, memo, description…"
               value={filters.search}
               onChange={(e) => setFilters((p) => ({ ...p, search: e.target.value }))}
               aria-label="Search transactions"
             />
-            <div className="FieldHelp">Example: “streaming”, “cafe”, “uber”.</div>
-          </div>
-
-          <div className="Field" style={{ minWidth: 220 }}>
-            <div className="FieldLabel">Demo state</div>
-            <select className="Select" value={uiState} onChange={(e) => setUiState(e.target.value)} aria-label="Demo state">
-              <option value="ready">Ready</option>
-              <option value="loading">Loading</option>
-              <option value="empty">Empty</option>
-              <option value="error">Error</option>
-            </select>
-            <div className="FieldHelp">
-              This toggles loading/empty/error UI (no backend). Realtime inserts will also refresh summaries.
-            </div>
+            <div className="FieldHelp">Uses ilike across merchant/description/memo (and category fallback).</div>
           </div>
         </FilterBar>
 
         <div className="Grid GridCols2">
-          <Card title="Summary" subtitle="Quick totals (placeholder)">
+          <Card title="Summary" subtitle="Computed from filtered results">
             <div className="Grid" style={{ gap: 10 }}>
               <div>
                 <div style={{ fontSize: 12, opacity: 0.7 }}>Total spend (filtered)</div>
@@ -225,76 +238,94 @@ export default function Transactions() {
             </div>
           </Card>
 
-          <Card title="Actions" subtitle="Helpful shortcuts">
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button
-                className="Button ButtonPrimary"
-                type="button"
-                onClick={() => {
-                  setUiState("loading");
-                  refreshSummaries();
-                }}
-              >
-                Simulate load
-              </button>
-              <button className="Button" type="button" onClick={() => setUiState("empty")}>
-                Simulate empty
-              </button>
-              <button className="Button ButtonDanger" type="button" onClick={() => setUiState("error")}>
-                Simulate error
-              </button>
+          <Card title="Pagination" subtitle="Browse the ledger">
+            <div style={{ display: "grid", gap: 10 }}>
+              <div style={{ fontSize: 13, opacity: 0.85 }}>
+                Showing page <strong>{page}</strong> of <strong>{totalPages}</strong> • Total rows:{" "}
+                <strong>{listState.total || 0}</strong>
+              </div>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button className="Button" type="button" onClick={() => setPage(1)} disabled={!canPrev}>
+                  First
+                </button>
+                <button className="Button" type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={!canPrev}>
+                  Prev
+                </button>
+                <button className="Button ButtonPrimary" type="button" onClick={() => refreshAll({ page })} disabled={listState.loading}>
+                  Refresh
+                </button>
+                <button
+                  className="Button"
+                  type="button"
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={!canNext}
+                >
+                  Next
+                </button>
+              </div>
+
+              <div style={{ fontSize: 12, opacity: 0.7 }}>
+                Realtime: INSERTs into <code>public.transactions</code> refresh this page.
+              </div>
             </div>
           </Card>
         </div>
 
-        <Card title="Transaction List" subtitle="Placeholder table (wire to backend later)">
-          {uiState === "loading" ? (
+        <Card title="Transaction List" subtitle="Supabase-backed table (transactions + categories)">
+          {listState.loading ? (
             <SkeletonTable rows={7} columns={5} />
-          ) : uiState === "error" ? (
-            <ErrorState
-              title="Couldn't load transactions"
-              message="This is a UI-only error placeholder. Hook this up to real fetch retries later."
-              onRetry={() => setUiState("ready")}
-            />
-          ) : uiState === "empty" ? (
+          ) : listState.error ? (
+            <ErrorState title="Couldn't load transactions" message={listState.error} onRetry={() => refreshAll({ page })} />
+          ) : !listState.rows.length ? (
             <EmptyState
               title="No transactions match your filters"
               message="Try widening the date range, removing category filters, or clearing search."
               ctaLabel="Clear all filters"
               onCta={() => {
                 onClearAll();
-                setUiState("ready");
+                setPage(1);
               }}
-              secondaryLabel="Set to Ready"
-              onSecondary={() => setUiState("ready")}
+              secondaryLabel="Reload"
+              onSecondary={() => refreshAll({ page: 1 })}
             />
           ) : (
-            <table className="Table" aria-label="Transactions table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Merchant</th>
-                  <th>Category</th>
-                  <th>Amount</th>
-                  <th>Flag</th>
-                </tr>
-              </thead>
-              <tbody>
-                {transactions.map((t) => (
-                  <tr key={t.id}>
-                    <td>{String(t.date).slice(0, 10)}</td>
-                    <td>{t.merchant}</td>
-                    <td>{t.category}</td>
-                    <td>{formatAmount(t.amount)}</td>
-                    <td>
-                      <span className={`Pill ${t.flag === "Review" ? "PillWarn" : t.flag === "OK" ? "PillSuccess" : ""}`}>
-                        {t.flag}
-                      </span>
-                    </td>
+            <>
+              <table className="Table" aria-label="Transactions table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Merchant</th>
+                    <th>Category</th>
+                    <th>Amount</th>
+                    <th>Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {listState.rows.map((t) => (
+                    <tr key={t.id}>
+                      <td>{safeDateLabel(t.date)}</td>
+                      <td>{t.merchant}</td>
+                      <td>{t.category}</td>
+                      <td>{formatAmount(t.amount)}</td>
+                      <td>
+                        <span className={`Pill ${t.status === "cleared" ? "PillSuccess" : t.status === "pending" ? "PillWarn" : ""}`}>
+                          {t.status || "—"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              <div style={{ height: 12 }} />
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", fontSize: 12, opacity: 0.75 }}>
+                <span>
+                  Tip: seed expenses are negative amounts. Use min/max accordingly (e.g., <code>-200</code> to <code>0</code>).
+                </span>
+              </div>
+            </>
           )}
         </Card>
       </div>

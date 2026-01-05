@@ -1,18 +1,34 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Card } from "../components/ui";
 import { EmptyState, ErrorState, FilterBar, SkeletonTable } from "../components/ux";
+import ToastNotice from "../components/ToastNotice";
+import { useTransactionsRealtime } from "../hooks/useTransactionsRealtime";
+import { fetchAlertsFromSupabase } from "../lib/data/supabaseQueries";
+
+function severityPillClass(severity) {
+  if (severity === "high") return "PillError";
+  if (severity === "medium") return "PillWarn";
+  if (severity === "low") return "PillInfo";
+  return "";
+}
+
+function statusPillClass(status) {
+  if (status === "active") return "PillSuccess";
+  if (status === "paused") return "PillWarn";
+  if (status === "resolved") return "PillInfo";
+  return "";
+}
 
 // PUBLIC_INTERFACE
 export default function Alerts() {
-  /** Alerts page: filters + rules + recent alert items placeholders with robust UX states (local state only). */
+  /** Alerts page: Supabase-backed alerts (rules + triggered), filterable, realtime refresh on new transactions (for triggered alerts workflows). */
 
   const [filters, setFilters] = useState({
-    status: "active",
+    status: "all",
     severity: "all"
   });
 
-  // Demo-only UI states (no real fetch yet).
-  const [uiState, setUiState] = useState("ready"); // "loading" | "empty" | "error" | "ready"
+  const [state, setState] = useState({ loading: true, error: null, data: [] });
 
   const summary = useMemo(() => {
     const parts = [];
@@ -21,15 +37,44 @@ export default function Alerts() {
     return parts.length ? parts.join(" • ") : "All alerts";
   }, [filters]);
 
-  const onClearAll = () => setFilters({ status: "active", severity: "all" });
+  const refreshAlerts = useCallback(async () => {
+    try {
+      setState((p) => ({ ...p, loading: true, error: null }));
+      const data = await fetchAlertsFromSupabase({
+        allowDemoUser: true,
+        status: filters.status,
+        severity: filters.severity,
+        limit: 30
+      });
+      setState({ loading: false, error: null, data: data || [] });
+    } catch (e) {
+      setState({ loading: false, error: e?.message || String(e), data: [] });
+    }
+  }, [filters.severity, filters.status]);
+
+  useEffect(() => {
+    refreshAlerts();
+  }, [refreshAlerts]);
+
+  // Realtime: inserts into transactions might lead to triggered alerts; refresh the list to surface them.
+  const { notice } = useTransactionsRealtime({
+    onRefreshRequested: refreshAlerts
+  });
+
+  const onClearAll = () => setFilters({ status: "all", severity: "all" });
 
   const onRemoveFilter = (key) => {
     if (key === "status") setFilters((p) => ({ ...p, status: "all" }));
     if (key === "severity") setFilters((p) => ({ ...p, severity: "all" }));
   };
 
+  const rules = useMemo(() => (state.data || []).filter((a) => a.kind === "rule").slice(0, 3), [state.data]);
+  const recent = useMemo(() => (state.data || []).slice(0, 12), [state.data]);
+
   return (
     <>
+      <ToastNotice message={notice} />
+
       <div className="PageHeader">
         <div>
           <h2>Alerts</h2>
@@ -71,74 +116,68 @@ export default function Alerts() {
           </select>
         </div>
 
-        <div className="Field" style={{ minWidth: 220 }}>
-          <div className="FieldLabel">Demo state</div>
-          <select className="Select" value={uiState} onChange={(e) => setUiState(e.target.value)} aria-label="Demo state">
-            <option value="ready">Ready</option>
-            <option value="loading">Loading</option>
-            <option value="empty">Empty</option>
-            <option value="error">Error</option>
-          </select>
+        <div className="Field" style={{ minWidth: 200 }}>
+          <div className="FieldLabel">Actions</div>
+          <button className="Button ButtonPrimary" type="button" onClick={refreshAlerts} disabled={state.loading}>
+            Refresh
+          </button>
+          <div className="FieldHelp">Loads from <code>public.alerts</code> (demo user scope until auth is enabled).</div>
         </div>
       </FilterBar>
 
       <div style={{ height: 14 }} />
 
-      {uiState === "loading" ? (
-        <div className="Grid GridCols3">
-          <Card title="Loading…" subtitle="Fetching alert rules"><div className="Skeleton" style={{ height: 110 }} /></Card>
-          <Card title="Loading…" subtitle="Fetching alert rules"><div className="Skeleton" style={{ height: 110 }} /></Card>
-          <Card title="Loading…" subtitle="Fetching alert rules"><div className="Skeleton" style={{ height: 110 }} /></Card>
-        </div>
-      ) : uiState === "error" ? (
-        <ErrorState
-          title="Couldn't load alerts"
-          message="This is a UI-only error placeholder. Hook up retry when backend fetching is added."
-          onRetry={() => setUiState("ready")}
-        />
-      ) : uiState === "empty" ? (
+      {state.loading ? (
+        <>
+          <div className="Grid GridCols3">
+            <Card title="Loading…" subtitle="Fetching alert rules">
+              <div className="Skeleton" style={{ height: 110 }} />
+            </Card>
+            <Card title="Loading…" subtitle="Fetching alert rules">
+              <div className="Skeleton" style={{ height: 110 }} />
+            </Card>
+            <Card title="Loading…" subtitle="Fetching alert rules">
+              <div className="Skeleton" style={{ height: 110 }} />
+            </Card>
+          </div>
+          <div style={{ marginTop: 14 }}>
+            <SkeletonTable rows={4} columns={4} />
+          </div>
+        </>
+      ) : state.error ? (
+        <ErrorState title="Couldn't load alerts" message={state.error} onRetry={refreshAlerts} />
+      ) : !state.data?.length ? (
         <EmptyState
           title="No alerts found"
-          message="Try changing status/severity filters, or clear all to see everything."
+          message="If Supabase is configured, seed data should include alert rules and a few triggered alerts. Try clearing filters or reloading."
           ctaLabel="Clear filters"
           onCta={() => {
             onClearAll();
-            setUiState("ready");
+            refreshAlerts();
           }}
-          secondaryLabel="Set to Ready"
-          onSecondary={() => setUiState("ready")}
+          secondaryLabel="Reload"
+          onSecondary={refreshAlerts}
         />
       ) : (
         <>
           <div className="Grid GridCols3">
-            <Card
-              title="Large Transaction"
-              subtitle="Notify when spend exceeds $200"
-              actions={<span className="Pill PillSuccess">Enabled</span>}
-            >
-              <p style={{ margin: 0, fontSize: 13, opacity: 0.85 }}>Helps you quickly confirm unexpected charges.</p>
-            </Card>
-
-            <Card
-              title="Category Budget"
-              subtitle="Dining exceeds $300/month"
-              actions={<span className="Pill PillWarn">Watching</span>}
-            >
-              <p style={{ margin: 0, fontSize: 13, opacity: 0.85 }}>Tracks a soft threshold and surfaces gentle reminders.</p>
-            </Card>
-
-            <Card
-              title="Merchant Anomaly"
-              subtitle="New merchant appears twice in 24h"
-              actions={<span className="Pill PillError">Action</span>}
-            >
-              <p style={{ margin: 0, fontSize: 13, opacity: 0.85 }}>Flags potentially fraudulent patterns for review.</p>
-            </Card>
+            {(rules.length ? rules : recent.slice(0, 3)).map((a) => (
+              <Card
+                key={a.id}
+                title={a.title}
+                subtitle={a.kind === "rule" ? "Rule" : "Triggered alert"}
+                actions={<span className={`Pill ${statusPillClass(a.status)}`}>{a.status}</span>}
+              >
+                <p style={{ margin: 0, fontSize: 13, opacity: 0.85 }}>{a.message || "—"}</p>
+                <div style={{ height: 10 }} />
+                <span className={`Pill ${severityPillClass(a.severity)}`}>Severity: {a.severity}</span>
+              </Card>
+            ))}
           </div>
 
           <div style={{ height: 14 }} />
 
-          <Card title="Recent Alerts" subtitle="Latest signals">
+          <Card title="Recent Alerts" subtitle="Latest signals from Supabase">
             <table className="Table" aria-label="Alerts table">
               <thead>
                 <tr>
@@ -149,41 +188,21 @@ export default function Alerts() {
                 </tr>
               </thead>
               <tbody>
-                <tr>
-                  <td>10:12</td>
-                  <td>Merchant anomaly</td>
-                  <td>“Bloom Electronics” appeared twice</td>
-                  <td>
-                    <span className="Pill PillError">Investigate</span>
-                  </td>
-                </tr>
-                <tr>
-                  <td>Yesterday</td>
-                  <td>Dining budget</td>
-                  <td>Dining reached 92% of threshold</td>
-                  <td>
-                    <span className="Pill PillWarn">Monitor</span>
-                  </td>
-                </tr>
-                <tr>
-                  <td>2 days ago</td>
-                  <td>Large transaction</td>
-                  <td>$248.10 at “Aurora Travel”</td>
-                  <td>
-                    <span className="Pill PillSuccess">Acknowledged</span>
-                  </td>
-                </tr>
+                {recent.map((a) => (
+                  <tr key={a.id}>
+                    <td>{String(a.triggered_at || a.updated_at || a.created_at || "").slice(0, 16).replace("T", " ") || "—"}</td>
+                    <td>{a.title}</td>
+                    <td>{a.message || "—"}</td>
+                    <td>
+                      <span className={`Pill ${statusPillClass(a.status)}`}>{a.status}</span>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </Card>
         </>
       )}
-
-      {uiState === "loading" ? (
-        <div style={{ marginTop: 14 }}>
-          <SkeletonTable rows={4} columns={4} />
-        </div>
-      ) : null}
     </>
   );
 }

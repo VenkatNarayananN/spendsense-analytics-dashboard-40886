@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Card } from "../components/ui";
 import { BarChartPlaceholder, LineChartPlaceholder } from "../components/charts/ChartPlaceholders";
 import { EmptyState, ErrorState, SegmentedControl, SkeletonCard } from "../components/ux";
@@ -20,15 +20,12 @@ const SEGMENT_OPTIONS = [
 
 // PUBLIC_INTERFACE
 export default function Insights() {
-  /** Insights page: time-range + segment controls and robust UX states (local state only). */
+  /** Insights page: Supabase-backed summary context + placeholders for charts; refreshes on realtime transaction INSERTs. */
 
   const [timeRange, setTimeRange] = useState("30d");
   const [segment, setSegment] = useState("Category");
 
-  // Demo-only UI states (no real fetch yet).
-  const [uiState, setUiState] = useState("ready"); // "loading" | "empty" | "error" | "ready"
-
-  const [freshnessLabel, setFreshnessLabel] = useState("Updated just now");
+  const [state, setState] = useState({ loading: true, error: null, data: null });
 
   const context = useMemo(() => {
     const rangeLabel = TIME_RANGE_OPTIONS.find((o) => o.value === timeRange)?.label || timeRange;
@@ -40,17 +37,29 @@ export default function Insights() {
 
   const refreshInsights = useCallback(async () => {
     try {
+      setState((p) => ({ ...p, loading: true, error: null }));
       const next = await fetchInsightsSummary({ timeRange, segment });
-      setFreshnessLabel(next?.freshnessLabel || "Updated just now");
+      setState({ loading: false, error: null, data: next });
     } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn("[SpendSense] Failed to refresh insights (placeholder).", e);
+      setState({ loading: false, error: e?.message || String(e), data: null });
     }
   }, [segment, timeRange]);
+
+  useEffect(() => {
+    refreshInsights();
+  }, [refreshInsights]);
 
   const { notice } = useTransactionsRealtime({
     onRefreshRequested: refreshInsights
   });
+
+  const badgeText = useMemo(() => {
+    if (state.loading) return `Time: ${context.rangeLabel} • Segment: ${context.segment} • Loading…`;
+    if (state.error) return `Time: ${context.rangeLabel} • Segment: ${context.segment} • Error`;
+    const d = state.data;
+    const extra = d ? `• Total: ${d.totalSpend} • Tx: ${d.txCount}` : "";
+    return `Time: ${context.rangeLabel} • Segment: ${context.segment} • ${d?.freshnessLabel || "Live"} ${extra}`;
+  }, [context, state]);
 
   return (
     <>
@@ -62,7 +71,7 @@ export default function Insights() {
           <p>Highlights that help you understand patterns and optimize spending.</p>
         </div>
         <span className="Badge" aria-label="Insights context">
-          <span aria-hidden="true">✨</span> Time: {context.rangeLabel} • Segment: {context.segment} • {freshnessLabel}
+          <span aria-hidden="true">✨</span> {badgeText}
         </span>
       </div>
 
@@ -70,7 +79,7 @@ export default function Insights() {
         <div className="CardHeader" style={{ marginBottom: 12 }}>
           <div className="CardTitle">
             <strong>Explore</strong>
-            <span>Adjust the time range and segment (local state only)</span>
+            <span>Time range and segment control (live summary)</span>
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
             <div style={{ display: "grid", gap: 6 }}>
@@ -82,45 +91,32 @@ export default function Insights() {
               <SegmentedControl options={SEGMENT_OPTIONS} value={segment} onChange={setSegment} ariaLabel="Segment" />
             </div>
 
-            <div style={{ display: "grid", gap: 6, minWidth: 200 }}>
-              <div style={{ fontSize: 12, opacity: 0.72 }}>Demo state</div>
-              <select className="Select" value={uiState} onChange={(e) => setUiState(e.target.value)} aria-label="Demo state">
-                <option value="ready">Ready</option>
-                <option value="loading">Loading</option>
-                <option value="empty">Empty</option>
-                <option value="error">Error</option>
-              </select>
-            </div>
+            <button className="Button ButtonPrimary" type="button" onClick={refreshInsights} disabled={state.loading}>
+              Refresh
+            </button>
           </div>
         </div>
 
         <div style={{ fontSize: 13, opacity: 0.8 }}>
-          Showing <strong>{context.segment}</strong> insights for <strong>{context.rangeLabel}</strong>. (Placeholder content)
+          Showing <strong>{context.segment}</strong> insights for <strong>{context.rangeLabel}</strong>. (Charts remain placeholders; summary is live.)
         </div>
       </div>
 
-      {uiState === "loading" ? (
+      {state.loading ? (
         <div className="Grid GridCols2">
           <SkeletonCard lines={4} />
           <SkeletonCard lines={4} />
         </div>
-      ) : uiState === "error" ? (
-        <ErrorState
-          title="Couldn't load insights"
-          message="This is a UI-only error placeholder. Wire up retry logic when backend fetching is added."
-          onRetry={() => setUiState("ready")}
-        />
-      ) : uiState === "empty" ? (
+      ) : state.error ? (
+        <ErrorState title="Couldn't load insights" message={state.error} onRetry={refreshInsights} />
+      ) : !state.data || (state.data.txCount || 0) === 0 ? (
         <EmptyState
           title="No insights available for this selection"
-          message="Try a wider time range or switch the segment to see more signals."
+          message="There are no transactions in the selected time range. Try widening the range or insert new transactions in Supabase."
           ctaLabel="Use 90d"
-          onCta={() => {
-            setTimeRange("90d");
-            setUiState("ready");
-          }}
-          secondaryLabel="Switch segment"
-          onSecondary={() => setSegment((s) => (s === "Category" ? "Merchant" : "Category"))}
+          onCta={() => setTimeRange("90d")}
+          secondaryLabel="Reload"
+          onSecondary={refreshInsights}
         />
       ) : (
         <>
@@ -128,19 +124,17 @@ export default function Insights() {
             <Card
               title={`Top Drivers (${context.segment})`}
               subtitle={`What influenced spend • ${context.rangeLabel}`}
-              actions={<button className="Button" type="button">Export</button>}
+              actions={
+                <button className="Button" type="button" onClick={refreshInsights} disabled={state.loading}>
+                  Refresh
+                </button>
+              }
             >
-              <BarChartPlaceholder
-                title={`Top Drivers by ${context.segment}`}
-                subtitle={`Placeholder • Range: ${context.rangeLabel}`}
-              />
+              <BarChartPlaceholder title={`Top Drivers by ${context.segment}`} subtitle={`Chart placeholder • Total: ${state.data.totalSpend}`} />
             </Card>
 
             <Card title={`${context.segment} Concentration`} subtitle={`Where you spend most often • ${context.rangeLabel}`}>
-              <LineChartPlaceholder
-                title={`${context.segment} Concentration`}
-                subtitle={`Placeholder • Range: ${context.rangeLabel}`}
-              />
+              <LineChartPlaceholder title={`${context.segment} Concentration`} subtitle={`Chart placeholder • Tx count: ${state.data.txCount}`} />
             </Card>
           </div>
 
@@ -149,17 +143,17 @@ export default function Insights() {
           <div className="Grid GridCols3">
             <Card title="Opportunity" subtitle={`Suggestions • ${context.rangeLabel}`}>
               <p style={{ margin: 0, fontSize: 13, opacity: 0.85 }}>
-                Consider consolidating subscriptions; 4 services overlap in weekly usage patterns.
+                With live data wired, the next step is to compute top categories/merchants and surface real recommendations.
               </p>
             </Card>
-            <Card title="Trend" subtitle={`${context.segment} moving up • ${context.rangeLabel}`}>
+            <Card title="Trend" subtitle={`${context.segment} movement • ${context.rangeLabel}`}>
               <p style={{ margin: 0, fontSize: 13, opacity: 0.85 }}>
-                Dining spend is up 12% compared to last month, mostly on weekdays.
+                This panel can be upgraded to show week-over-week comparisons once we add simple group-by queries or a view.
               </p>
             </Card>
-            <Card title="Signal" subtitle={`Unusual spike detected • ${context.rangeLabel}`}>
+            <Card title="Signal" subtitle={`Realtime-aware • ${context.rangeLabel}`}>
               <p style={{ margin: 0, fontSize: 13, opacity: 0.85 }}>
-                Transport spend peaked on the 2nd; review for outliers or reimbursements.
+                When a transaction is inserted, insights automatically refresh via the existing realtime hook.
               </p>
             </Card>
           </div>

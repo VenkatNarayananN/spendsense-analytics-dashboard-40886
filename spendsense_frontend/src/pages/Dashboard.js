@@ -5,45 +5,70 @@ import { EmptyState, ErrorState, SkeletonCard, SkeletonTable } from "../componen
 import ToastNotice from "../components/ToastNotice";
 import { fetchDashboardSummary } from "../lib/data/dashboardData";
 import { useTransactionsRealtime } from "../hooks/useTransactionsRealtime";
+import { fetchRecentTransactionsFromSupabase } from "../lib/data/supabaseQueries";
+
+function formatAmount(amount) {
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return "-$—";
+  // Seed data uses negative for expenses; normalize to "-$xx".
+  const sign = n < 0 ? "-" : "+";
+  return `${sign}$${Math.abs(n).toFixed(2)}`;
+}
+
+function statusPillClass(status) {
+  if (status === "cleared") return "PillSuccess";
+  if (status === "pending") return "PillWarn";
+  if (status === "void") return "PillError";
+  return "";
+}
 
 // PUBLIC_INTERFACE
 export default function Dashboard() {
-  /** Dashboard page: KPIs + charts + recent activity placeholders with robust UX states (local state only). */
+  /** Dashboard page: loads real KPI + recent activity from Supabase; refreshes on realtime transaction INSERTs. */
 
-  // Demo-only UI state toggles (no backend fetch yet).
-  const [uiState, setUiState] = useState("ready"); // "loading" | "empty" | "error" | "ready"
-
-  // Lightweight, local "data" state to demonstrate refresh signals.
-  const [summary, setSummary] = useState({
-    thisMonthSpend: "$3,482.10",
-    budgetRemaining: "$1,217.90",
-    savings: "+$164.00",
-    freshnessLabel: "Updated just now"
-  });
+  const [summaryState, setSummaryState] = useState({ loading: true, error: null, data: null });
+  const [recentState, setRecentState] = useState({ loading: true, error: null, data: [] });
 
   const refreshSummary = useCallback(async () => {
     try {
+      setSummaryState((p) => ({ ...p, loading: true, error: null }));
       const next = await fetchDashboardSummary();
-      setSummary(next);
+      setSummaryState({ loading: false, error: null, data: next });
     } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn("[SpendSense] Failed to refresh dashboard summary (placeholder).", e);
+      setSummaryState({ loading: false, error: e?.message || String(e), data: null });
     }
   }, []);
 
-  // Fetch once on mount (placeholder).
+  const refreshRecent = useCallback(async () => {
+    try {
+      setRecentState((p) => ({ ...p, loading: true, error: null }));
+      const rows = await fetchRecentTransactionsFromSupabase({ allowDemoUser: true, limit: 6 });
+      setRecentState({ loading: false, error: null, data: rows || [] });
+    } catch (e) {
+      setRecentState({ loading: false, error: e?.message || String(e), data: [] });
+    }
+  }, []);
+
+  const refreshAll = useCallback(async () => {
+    await Promise.all([refreshSummary(), refreshRecent()]);
+  }, [refreshRecent, refreshSummary]);
+
+  // Initial load
   useEffect(() => {
-    refreshSummary();
-  }, [refreshSummary]);
+    refreshAll();
+  }, [refreshAll]);
 
   const { notice } = useTransactionsRealtime({
-    onRefreshRequested: refreshSummary
+    onRefreshRequested: refreshAll
   });
 
   const freshnessText = useMemo(() => {
-    if (uiState !== "ready") return `State: ${uiState}`;
-    return summary.freshnessLabel || "Updated just now";
-  }, [summary.freshnessLabel, uiState]);
+    if (summaryState.loading) return "Loading…";
+    if (summaryState.error) return "Error loading";
+    return summaryState.data?.freshnessLabel || "Live";
+  }, [summaryState]);
+
+  const kpis = summaryState.data;
 
   return (
     <>
@@ -59,26 +84,7 @@ export default function Dashboard() {
         </span>
       </div>
 
-      <div className="Card" style={{ marginBottom: 14 }}>
-        <div className="CardHeader" style={{ marginBottom: 8 }}>
-          <div className="CardTitle">
-            <strong>Demo controls</strong>
-            <span>Toggle loading/empty/error placeholders (UI only)</span>
-          </div>
-          <select className="Select" value={uiState} onChange={(e) => setUiState(e.target.value)} aria-label="Demo state">
-            <option value="ready">Ready</option>
-            <option value="loading">Loading</option>
-            <option value="empty">Empty</option>
-            <option value="error">Error</option>
-          </select>
-        </div>
-        <div style={{ fontSize: 13, opacity: 0.8 }}>
-          This dashboard uses skeleton loaders and empty/error states to model real data fetching later. When Supabase is
-          configured, it also listens for live transaction inserts and refreshes KPIs.
-        </div>
-      </div>
-
-      {uiState === "loading" ? (
+      {summaryState.loading ? (
         <>
           <div className="Grid GridCols3">
             <SkeletonCard lines={2} />
@@ -103,38 +109,37 @@ export default function Dashboard() {
             <SkeletonTable rows={5} columns={4} />
           </Card>
         </>
-      ) : uiState === "error" ? (
+      ) : summaryState.error ? (
         <ErrorState
           title="Couldn't load dashboard data"
-          message="This is a UI-only error placeholder. Hook up retries when you add real API calls."
-          onRetry={() => setUiState("ready")}
+          message={summaryState.error}
+          onRetry={refreshAll}
+          retryLabel="Retry"
         />
-      ) : uiState === "empty" ? (
+      ) : !kpis ? (
         <EmptyState
           title="No data to show yet"
-          message="Connect a data source or adjust filters once transaction syncing is enabled."
-          ctaLabel="Set to Ready"
-          onCta={() => setUiState("ready")}
-          secondaryLabel="Learn more (placeholder)"
-          onSecondary={() => setUiState("ready")}
+          message="There are no transactions available for this workspace. If Supabase is configured, seed data or insert a transaction to get started."
+          ctaLabel="Reload"
+          onCta={refreshAll}
         />
       ) : (
         <>
           <div className="Grid GridCols3">
-            <MetricCard title="This Month" subtitle="Total spend" value={summary.thisMonthSpend} trendPercent={72} />
-            <MetricCard title="Budget Health" subtitle="Remaining" value={summary.budgetRemaining} trendPercent={48} />
-            <MetricCard title="Savings" subtitle="vs. last month" value={summary.savings} trendPercent={64} />
+            <MetricCard title="This Month" subtitle="Total spend" value={kpis.thisMonthSpend} trendPercent={72} />
+            <MetricCard title="Budget Health" subtitle="Remaining" value={kpis.budgetRemaining} trendPercent={48} />
+            <MetricCard title="Savings" subtitle="vs. forecast" value={kpis.savings} trendPercent={64} />
           </div>
 
           <div style={{ height: 14 }} />
 
           <div className="Grid GridCols2">
             <Card title="Spending Trend" subtitle="Last 30 days">
-              <LineChartPlaceholder title="Spending Trend" subtitle="Line/area chart placeholder" />
+              <LineChartPlaceholder title="Spending Trend" subtitle="Chart placeholder (data wired soon)" />
             </Card>
 
             <Card title="Category Breakdown" subtitle="Top categories">
-              <PieChartPlaceholder title="Category Breakdown" subtitle="Donut/pie chart placeholder" />
+              <PieChartPlaceholder title="Category Breakdown" subtitle="Chart placeholder (data wired soon)" />
             </Card>
           </div>
 
@@ -142,45 +147,48 @@ export default function Dashboard() {
 
           <Card
             title="Recent Activity"
-            subtitle="A small snapshot of your latest transactions"
-            actions={<button className="Button" type="button">View all</button>}
+            subtitle={recentState.loading ? "Loading…" : "Latest transactions from Supabase"}
+            actions={
+              <button className="Button" type="button" onClick={refreshRecent} disabled={recentState.loading}>
+                Refresh
+              </button>
+            }
           >
-            <table className="Table" aria-label="Recent transactions">
-              <thead>
-                <tr>
-                  <th>Merchant</th>
-                  <th>Category</th>
-                  <th>Amount</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>Ocean Café</td>
-                  <td>Dining</td>
-                  <td>-$18.40</td>
-                  <td>
-                    <span className="Pill PillSuccess">Cleared</span>
-                  </td>
-                </tr>
-                <tr>
-                  <td>Cloud Transit</td>
-                  <td>Transport</td>
-                  <td>-$42.00</td>
-                  <td>
-                    <span className="Pill PillWarn">Pending</span>
-                  </td>
-                </tr>
-                <tr>
-                  <td>Rose Market</td>
-                  <td>Groceries</td>
-                  <td>-$96.72</td>
-                  <td>
-                    <span className="Pill PillSuccess">Cleared</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+            {recentState.loading ? (
+              <SkeletonTable rows={5} columns={4} />
+            ) : recentState.error ? (
+              <ErrorState title="Couldn't load recent activity" message={recentState.error} onRetry={refreshRecent} />
+            ) : !recentState.data?.length ? (
+              <EmptyState
+                title="No recent transactions"
+                message="Once transactions are inserted, they'll appear here automatically. Realtime is enabled when Supabase is configured."
+                ctaLabel="Reload"
+                onCta={refreshRecent}
+              />
+            ) : (
+              <table className="Table" aria-label="Recent transactions">
+                <thead>
+                  <tr>
+                    <th>Merchant</th>
+                    <th>Category</th>
+                    <th>Amount</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentState.data.map((t) => (
+                    <tr key={t.id}>
+                      <td>{t.merchant}</td>
+                      <td>{t.category}</td>
+                      <td>{formatAmount(t.amount)}</td>
+                      <td>
+                        <span className={`Pill ${statusPillClass(t.status)}`}>{t.status || "—"}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </Card>
         </>
       )}
