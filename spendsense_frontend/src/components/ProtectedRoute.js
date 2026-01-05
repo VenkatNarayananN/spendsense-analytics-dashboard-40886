@@ -31,14 +31,14 @@ export default function ProtectedRoute({ children, redirectTo = "/" }) {
     <div className="Card" role="alert" aria-live="polite">
       <div className="CardHeader">
         <div className="CardTitle">
-          <strong>Sign-in required</strong>
+          <strong>Sign in required</strong>
           <span>Access to this page is protected.</span>
         </div>
       </div>
 
       <p style={{ margin: 0, fontSize: 13, opacity: 0.85, lineHeight: 1.5 }}>
-        You tried to open <code>{location.pathname}</code>, but you’re not signed in. Please return to the landing page and sign in with
-        Google to continue.
+        You tried to open <code>{location.pathname}</code>, but you’re not authenticated. Please return to the landing page and sign in or
+        sign up with Google to continue.
       </p>
 
       <div style={{ height: 12 }} />

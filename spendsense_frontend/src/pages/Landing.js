@@ -7,20 +7,26 @@ import { useAuth } from "../auth/AuthContext";
 export default function Landing() {
   /** Public landing/login page for SpendSense. */
   const navigate = useNavigate();
-  const { user, loading, signInWithGoogle } = useAuth();
+  const { user, loading, signInWithGoogle, signUpWithGoogle } = useAuth();
   const [error, setError] = useState(null);
 
   const subtitle = useMemo(() => {
     if (loading) return "Checking session…";
     if (user) return "Signed in — redirecting to your dashboard.";
-    return "Sign in to access your dashboard, transactions, insights, and alerts.";
+    return "Sign in or sign up to access your dashboard, transactions, insights, and alerts.";
   }, [loading, user]);
 
   const onSignIn = async () => {
     setError(null);
-    const { error: err } = await signInWithGoogle();
+    const { error: err } = await signInWithGoogle({ intent: "signin" });
     if (err) setError(err.message || String(err));
     // OAuth will redirect away if successful; no need to navigate here.
+  };
+
+  const onSignUp = async () => {
+    setError(null);
+    const { error: err } = await signUpWithGoogle();
+    if (err) setError(err.message || String(err));
   };
 
   // If already logged in, send to dashboard.
@@ -81,41 +87,84 @@ export default function Landing() {
             <div style={{ height: 14 }} />
 
             <div style={{ display: "grid", gap: 10 }}>
-              <button
-                className="Button ButtonPrimary"
-                type="button"
-                onClick={onSignIn}
-                disabled={loading || Boolean(user)}
-                aria-label="Sign in with Google"
+              <div
                 style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 10,
-                  height: 44
+                  display: "grid",
+                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                  gap: 10
                 }}
               >
-                <span
-                  aria-hidden="true"
+                <button
+                  className="Button ButtonPrimary"
+                  type="button"
+                  onClick={onSignIn}
+                  disabled={loading || Boolean(user)}
+                  aria-label="Sign in with Google"
                   style={{
-                    width: 22,
-                    height: 22,
-                    borderRadius: 999,
-                    border: "1px solid rgba(2, 6, 23, 0.10)",
-                    background: "rgba(255, 255, 255, 0.9)",
-                    display: "grid",
-                    placeItems: "center",
-                    fontSize: 13
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 10,
+                    height: 44,
+                    width: "100%"
                   }}
                 >
-                  G
-                </span>
-                Sign in with Google
-              </button>
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: 999,
+                      border: "1px solid rgba(2, 6, 23, 0.10)",
+                      background: "rgba(255, 255, 255, 0.9)",
+                      display: "grid",
+                      placeItems: "center",
+                      fontSize: 13
+                    }}
+                  >
+                    G
+                  </span>
+                  Sign in
+                </button>
+
+                <button
+                  className="Button"
+                  type="button"
+                  onClick={onSignUp}
+                  disabled={loading || Boolean(user)}
+                  aria-label="Sign up with Google"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 10,
+                    height: 44,
+                    width: "100%",
+                    border: "1px solid rgba(244, 114, 182, 0.35)"
+                  }}
+                >
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: 999,
+                      border: "1px solid rgba(2, 6, 23, 0.10)",
+                      background: "rgba(255, 255, 255, 0.9)",
+                      display: "grid",
+                      placeItems: "center",
+                      fontSize: 13
+                    }}
+                  >
+                    G
+                  </span>
+                  Sign up
+                </button>
+              </div>
 
               {error ? (
                 <div className="StateBox" role="alert" aria-live="polite" style={{ padding: 12 }}>
-                  <h3 className="StateTitle">Sign-in failed</h3>
+                  <h3 className="StateTitle">Authentication failed</h3>
                   <p className="StateText" style={{ marginBottom: 0 }}>
                     {error}
                   </p>
@@ -126,6 +175,14 @@ export default function Landing() {
                 Tip: ensure Supabase Google provider is enabled and Redirect URL includes{" "}
                 <code>{(process.env.REACT_APP_FRONTEND_URL || window.location.origin) + "/auth/callback"}</code>.
               </div>
+
+              <style>
+                {`
+                  @media (max-width: 680px) {
+                    .GridCols2 { grid-template-columns: 1fr; }
+                  }
+                `}
+              </style>
             </div>
           </section>
 

@@ -27,11 +27,18 @@ Example (do not commit `.env`, use `.env.example` instead):
 ## Frontend Auth Flow
 
 - Landing page is public: `/`
-- User clicks **Sign in with Google** which calls:
-  - `supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: '${REACT_APP_FRONTEND_URL}/auth/callback' } })`
+- User clicks **Sign in with Google** or **Sign up with Google** which calls:
+  - `supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: '${REACT_APP_FRONTEND_URL}/auth/callback', queryParams: { prompt: 'select_account' } } })`
+  - For sign-up intent, the UI uses a more explicit prompt to encourage consent/account selection:
+    - `queryParams: { prompt: 'consent select_account' }`
 - Supabase redirects back to `/auth/callback`
 - The callback route reads the session (if present), then redirects to `/dashboard`.
 - All non-landing routes are protected. If unauthenticated, the user sees a friendly guard panel and can go back to Landing.
+
+### Profile bootstrap (optional)
+
+If a `profiles` table exists, the frontend will attempt a **best-effort** upsert of a minimal profile record after authentication (id/email/name/avatar).  
+If the table does not exist or RLS blocks it, it safely no-ops.
 
 ## Notes about Data + Realtime
 
@@ -65,5 +72,3 @@ These are documented in `.env.example`.
 ### Security
 
 - The App ID is **never rendered** in the UI and is **not logged** by the client code.
-=======
-
