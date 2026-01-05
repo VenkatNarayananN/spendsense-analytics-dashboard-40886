@@ -20,12 +20,13 @@ const SEGMENT_OPTIONS = [
 
 // PUBLIC_INTERFACE
 export default function Insights() {
-  /** Insights page: Supabase-backed summary context + placeholders for charts; refreshes on realtime transaction INSERTs. */
+  /** Insights page: Supabase-backed summary context + placeholders for charts; totals normalized to USD; refreshes on realtime transaction INSERTs. */
 
   const [timeRange, setTimeRange] = useState("30d");
   const [segment, setSegment] = useState("Category");
 
   const [state, setState] = useState({ loading: true, error: null, data: null });
+  const [fxNotice, setFxNotice] = useState(null);
 
   const context = useMemo(() => {
     const rangeLabel = TIME_RANGE_OPTIONS.find((o) => o.value === timeRange)?.label || timeRange;
@@ -40,6 +41,8 @@ export default function Insights() {
       setState((p) => ({ ...p, loading: true, error: null }));
       const next = await fetchInsightsSummary({ timeRange, segment });
       setState({ loading: false, error: null, data: next });
+
+      if (next?.fx?.usedFallback && next?.fx?.warning) setFxNotice(next.fx.warning);
     } catch (e) {
       setState({ loading: false, error: e?.message || String(e), data: null });
     }
@@ -53,22 +56,29 @@ export default function Insights() {
     onRefreshRequested: refreshInsights
   });
 
+  // Auto-clear FX notice after a while (non-blocking).
+  useEffect(() => {
+    if (!fxNotice) return undefined;
+    const t = window.setTimeout(() => setFxNotice(null), 5200);
+    return () => window.clearTimeout(t);
+  }, [fxNotice]);
+
   const badgeText = useMemo(() => {
     if (state.loading) return `Time: ${context.rangeLabel} • Segment: ${context.segment} • Loading…`;
     if (state.error) return `Time: ${context.rangeLabel} • Segment: ${context.segment} • Error`;
     const d = state.data;
-    const extra = d ? `• Total: ${d.totalSpend} • Tx: ${d.txCount}` : "";
+    const extra = d ? `• Total (USD): ${d.totalSpend} • Tx: ${d.txCount}` : "";
     return `Time: ${context.rangeLabel} • Segment: ${context.segment} • ${d?.freshnessLabel || "Live"} ${extra}`;
   }, [context, state]);
 
   return (
     <>
-      <ToastNotice message={notice} />
+      <ToastNotice message={fxNotice || notice} />
 
       <div className="PageHeader">
         <div>
           <h2>Insights</h2>
-          <p>Highlights that help you understand patterns and optimize spending.</p>
+          <p>Highlights that help you understand patterns and optimize spending (USD-normalized).</p>
         </div>
         <span className="Badge" aria-label="Insights context">
           <span aria-hidden="true">✨</span> {badgeText}
@@ -98,7 +108,8 @@ export default function Insights() {
         </div>
 
         <div style={{ fontSize: 13, opacity: 0.8 }}>
-          Showing <strong>{context.segment}</strong> insights for <strong>{context.rangeLabel}</strong>. (Charts remain placeholders; summary is live.)
+          Showing <strong>{context.segment}</strong> insights for <strong>{context.rangeLabel}</strong>. Totals are normalized to{" "}
+          <strong>USD</strong>.
         </div>
       </div>
 
@@ -130,11 +141,17 @@ export default function Insights() {
                 </button>
               }
             >
-              <BarChartPlaceholder title={`Top Drivers by ${context.segment}`} subtitle={`Chart placeholder • Total: ${state.data.totalSpend}`} />
+              <BarChartPlaceholder
+                title={`Top Drivers by ${context.segment}`}
+                subtitle={`Chart placeholder • Total (USD): ${state.data.totalSpend}`}
+              />
             </Card>
 
             <Card title={`${context.segment} Concentration`} subtitle={`Where you spend most often • ${context.rangeLabel}`}>
-              <LineChartPlaceholder title={`${context.segment} Concentration`} subtitle={`Chart placeholder • Tx count: ${state.data.txCount}`} />
+              <LineChartPlaceholder
+                title={`${context.segment} Concentration`}
+                subtitle={`Chart placeholder • Tx count: ${state.data.txCount}`}
+              />
             </Card>
           </div>
 
@@ -143,7 +160,7 @@ export default function Insights() {
           <div className="Grid GridCols3">
             <Card title="Opportunity" subtitle={`Suggestions • ${context.rangeLabel}`}>
               <p style={{ margin: 0, fontSize: 13, opacity: 0.85 }}>
-                With live data wired, the next step is to compute top categories/merchants and surface real recommendations.
+                With live data wired, the next step is to compute top categories/merchants and surface real recommendations (in USD).
               </p>
             </Card>
             <Card title="Trend" subtitle={`${context.segment} movement • ${context.rangeLabel}`}>
@@ -153,7 +170,7 @@ export default function Insights() {
             </Card>
             <Card title="Signal" subtitle={`Realtime-aware • ${context.rangeLabel}`}>
               <p style={{ margin: 0, fontSize: 13, opacity: 0.85 }}>
-                When a transaction is inserted, insights automatically refresh via the existing realtime hook.
+                When a transaction is inserted, insights automatically refresh via the existing realtime hook and re-compute USD totals.
               </p>
             </Card>
           </div>

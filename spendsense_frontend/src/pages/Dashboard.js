@@ -7,14 +7,7 @@ import { fetchDashboardSummary } from "../lib/data/dashboardData";
 import { useTransactionsRealtime } from "../hooks/useTransactionsRealtime";
 import { fetchRecentTransactionsFromSupabase } from "../lib/data/supabaseQueries";
 import { getAuthenticatedUserId } from "../auth/userContext";
-
-function formatAmount(amount) {
-  const n = Number(amount);
-  if (!Number.isFinite(n)) return "-$—";
-  // Seed data uses negative for expenses; normalize to "-$xx".
-  const sign = n < 0 ? "-" : "+";
-  return `${sign}$${Math.abs(n).toFixed(2)}`;
-}
+import { formatWithOriginal } from "../lib/fx/openExchangeRates";
 
 function statusPillClass(status) {
   if (status === "cleared") return "PillSuccess";
@@ -25,16 +18,21 @@ function statusPillClass(status) {
 
 // PUBLIC_INTERFACE
 export default function Dashboard() {
-  /** Dashboard page: loads real KPI + recent activity from Supabase; refreshes on realtime transaction INSERTs. */
+  /** Dashboard page: loads KPI + recent activity from Supabase; normalizes to USD; refreshes on realtime transaction INSERTs. */
 
   const [summaryState, setSummaryState] = useState({ loading: true, error: null, data: null });
-  const [recentState, setRecentState] = useState({ loading: true, error: null, data: [] });
+  const [recentState, setRecentState] = useState({ loading: true, error: null, data: [], fx: null });
+
+  // Non-blocking notices: realtime + FX fallback warning.
+  const [fxNotice, setFxNotice] = useState(null);
 
   const refreshSummary = useCallback(async () => {
     try {
       setSummaryState((p) => ({ ...p, loading: true, error: null }));
       const next = await fetchDashboardSummary();
       setSummaryState({ loading: false, error: null, data: next });
+
+      if (next?.fx?.usedFallback && next?.fx?.warning) setFxNotice(next.fx.warning);
     } catch (e) {
       setSummaryState({ loading: false, error: e?.message || String(e), data: null });
     }
@@ -44,10 +42,12 @@ export default function Dashboard() {
     try {
       setRecentState((p) => ({ ...p, loading: true, error: null }));
       const userId = await getAuthenticatedUserId();
-      const rows = await fetchRecentTransactionsFromSupabase({ userId, allowDemoUser: true, limit: 6 });
-      setRecentState({ loading: false, error: null, data: rows || [] });
+      const res = await fetchRecentTransactionsFromSupabase({ userId, allowDemoUser: true, limit: 6 });
+      setRecentState({ loading: false, error: null, data: res.rows || [], fx: res.fx || null });
+
+      if (res?.fx?.usedFallback && res?.fx?.warning) setFxNotice(res.fx.warning);
     } catch (e) {
-      setRecentState({ loading: false, error: e?.message || String(e), data: [] });
+      setRecentState({ loading: false, error: e?.message || String(e), data: [], fx: null });
     }
   }, []);
 
@@ -59,6 +59,13 @@ export default function Dashboard() {
   useEffect(() => {
     refreshAll();
   }, [refreshAll]);
+
+  // Auto-clear FX notice after a while (non-blocking).
+  useEffect(() => {
+    if (!fxNotice) return undefined;
+    const t = window.setTimeout(() => setFxNotice(null), 5200);
+    return () => window.clearTimeout(t);
+  }, [fxNotice]);
 
   const { notice } = useTransactionsRealtime({
     onRefreshRequested: refreshAll
@@ -74,12 +81,12 @@ export default function Dashboard() {
 
   return (
     <>
-      <ToastNotice message={notice} />
+      <ToastNotice message={fxNotice || notice} />
 
       <div className="PageHeader">
         <div>
           <h2>Dashboard</h2>
-          <p>Key metrics, trends, and quick signals across your spending.</p>
+          <p>Key metrics, trends, and quick signals across your spending (USD-normalized).</p>
         </div>
         <span className="Badge" aria-label="Data freshness">
           <span aria-hidden="true">⏱️</span> {freshnessText}
@@ -128,20 +135,20 @@ export default function Dashboard() {
       ) : (
         <>
           <div className="Grid GridCols3">
-            <MetricCard title="This Month" subtitle="Total spend" value={kpis.thisMonthSpend} trendPercent={72} />
-            <MetricCard title="Budget Health" subtitle="Remaining" value={kpis.budgetRemaining} trendPercent={48} />
-            <MetricCard title="Savings" subtitle="vs. forecast" value={kpis.savings} trendPercent={64} />
+            <MetricCard title="This Month" subtitle="Total spend (USD)" value={kpis.thisMonthSpend} trendPercent={72} />
+            <MetricCard title="Budget Health" subtitle="Remaining (USD)" value={kpis.budgetRemaining} trendPercent={48} />
+            <MetricCard title="Savings" subtitle="vs. forecast (USD)" value={kpis.savings} trendPercent={64} />
           </div>
 
           <div style={{ height: 14 }} />
 
           <div className="Grid GridCols2">
-            <Card title="Spending Trend" subtitle="Last 30 days">
-              <LineChartPlaceholder title="Spending Trend" subtitle="Chart placeholder (data wired soon)" />
+            <Card title="Spending Trend" subtitle="Last 30 days (USD)">
+              <LineChartPlaceholder title="Spending Trend" subtitle="Chart placeholder (USD-normalized soon)" />
             </Card>
 
-            <Card title="Category Breakdown" subtitle="Top categories">
-              <PieChartPlaceholder title="Category Breakdown" subtitle="Chart placeholder (data wired soon)" />
+            <Card title="Category Breakdown" subtitle="Top categories (USD)">
+              <PieChartPlaceholder title="Category Breakdown" subtitle="Chart placeholder (USD-normalized soon)" />
             </Card>
           </div>
 
@@ -149,7 +156,7 @@ export default function Dashboard() {
 
           <Card
             title="Recent Activity"
-            subtitle={recentState.loading ? "Loading…" : "Latest transactions from Supabase"}
+            subtitle={recentState.loading ? "Loading…" : "Latest transactions from Supabase (USD-normalized)"}
             actions={
               <button className="Button" type="button" onClick={refreshRecent} disabled={recentState.loading}>
                 Refresh
@@ -173,21 +180,29 @@ export default function Dashboard() {
                   <tr>
                     <th>Merchant</th>
                     <th>Category</th>
-                    <th>Amount</th>
+                    <th>Amount (USD)</th>
                     <th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {recentState.data.map((t) => (
-                    <tr key={t.id}>
-                      <td>{t.merchant}</td>
-                      <td>{t.category}</td>
-                      <td>{formatAmount(t.amount)}</td>
-                      <td>
-                        <span className={`Pill ${statusPillClass(t.status)}`}>{t.status || "—"}</span>
-                      </td>
-                    </tr>
-                  ))}
+                  {recentState.data.map((t) => {
+                    const fmt = formatWithOriginal({
+                      amountUsd: t.amount_usd,
+                      originalAmount: t.original_amount,
+                      originalCurrency: t.currency
+                    });
+
+                    return (
+                      <tr key={t.id}>
+                        <td>{t.merchant}</td>
+                        <td>{t.category}</td>
+                        <td title={fmt.title}>{fmt.text}</td>
+                        <td>
+                          <span className={`Pill ${statusPillClass(t.status)}`}>{t.status || "—"}</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             )}

@@ -6,14 +6,7 @@ import { fetchTransactionsSummary } from "../lib/data/dashboardData";
 import { useTransactionsRealtime } from "../hooks/useTransactionsRealtime";
 import { fetchTransactionsPageFromSupabase } from "../lib/data/supabaseQueries";
 import { getAuthenticatedUserId } from "../auth/userContext";
-
-function formatAmount(amount) {
-  const n = Number(amount);
-  if (!Number.isFinite(n)) return "-$—";
-  // Seed data uses negative for expenses; show sign explicitly.
-  const sign = n < 0 ? "-" : "+";
-  return `${sign}$${Math.abs(n).toFixed(2)}`;
-}
+import { formatWithOriginal } from "../lib/fx/openExchangeRates";
 
 function safeDateLabel(isoOrDate) {
   if (!isoOrDate) return "—";
@@ -24,7 +17,7 @@ function safeDateLabel(isoOrDate) {
 
 // PUBLIC_INTERFACE
 export default function Transactions() {
-  /** Transactions page: Supabase-backed list with pagination + basic filters; realtime INSERTs trigger refresh. */
+  /** Transactions page: Supabase-backed list with pagination + basic filters; USD-normalized display; realtime INSERTs trigger refresh. */
 
   const CATEGORY_OPTIONS = useMemo(
     () => [
@@ -57,11 +50,14 @@ export default function Transactions() {
   const [page, setPage] = useState(1);
   const [pageSize] = useState(15);
 
-  const [listState, setListState] = useState({ loading: true, error: null, rows: [], total: 0 });
+  const [listState, setListState] = useState({ loading: true, error: null, rows: [], total: 0, fx: null });
   const [summary, setSummary] = useState({
     totalSpendFiltered: "$0.00",
-    averageTransaction: "$0.00"
+    averageTransaction: "$0.00",
+    fx: null
   });
+
+  const [fxNotice, setFxNotice] = useState(null);
 
   const refreshList = useCallback(
     async (opts = {}) => {
@@ -81,8 +77,11 @@ export default function Transactions() {
           loading: false,
           error: null,
           rows: res.rows || [],
-          total: res.total || 0
+          total: res.total || 0,
+          fx: res.fx || null
         });
+
+        if (res?.fx?.usedFallback && res?.fx?.warning) setFxNotice(res.fx.warning);
       } catch (e) {
         setListState((p) => ({
           ...p,
@@ -98,6 +97,8 @@ export default function Transactions() {
     try {
       const next = await fetchTransactionsSummary(filters);
       setSummary(next);
+
+      if (next?.fx?.usedFallback && next?.fx?.warning) setFxNotice(next.fx.warning);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn("[SpendSense] Failed to refresh transaction summaries.", e);
@@ -120,6 +121,13 @@ export default function Transactions() {
   const { notice } = useTransactionsRealtime({
     onRefreshRequested: () => refreshAll({ page: 1 })
   });
+
+  // Auto-clear FX notice after a while (non-blocking).
+  useEffect(() => {
+    if (!fxNotice) return undefined;
+    const t = window.setTimeout(() => setFxNotice(null), 5200);
+    return () => window.clearTimeout(t);
+  }, [fxNotice]);
 
   // When filters change, reset to page 1 (and refetch).
   useEffect(() => {
@@ -165,12 +173,12 @@ export default function Transactions() {
 
   return (
     <>
-      <ToastNotice message={notice} />
+      <ToastNotice message={fxNotice || notice} />
 
       <div className="PageHeader">
         <div>
           <h2>Transactions</h2>
-          <p>Browse, search, and categorize spending activity.</p>
+          <p>Browse, search, and categorize spending activity (USD-normalized display).</p>
         </div>
         <span className="Badge">
           <span aria-hidden="true">🧾</span> {filteredSummary.descriptor}
@@ -199,7 +207,7 @@ export default function Transactions() {
               onChange={(e) => setFilters((p) => ({ ...p, amountMin: e.target.value }))}
               aria-label="Minimum amount"
             />
-            <div className="FieldHelp">Tip: seed expenses are negative. Example: -50</div>
+            <div className="FieldHelp">Filters apply to the raw amount column (not USD). Tip: seed expenses are negative.</div>
           </div>
 
           <div className="Field" style={{ minWidth: 180 }}>
@@ -228,14 +236,14 @@ export default function Transactions() {
         </FilterBar>
 
         <div className="Grid GridCols2">
-          <Card title="Summary" subtitle="Computed from filtered results">
+          <Card title="Summary" subtitle="Computed from filtered results (USD)">
             <div className="Grid" style={{ gap: 10 }}>
               <div>
-                <div style={{ fontSize: 12, opacity: 0.7 }}>Total spend (filtered)</div>
+                <div style={{ fontSize: 12, opacity: 0.7 }}>Total spend (filtered, USD)</div>
                 <div className="Metric">{summary.totalSpendFiltered}</div>
               </div>
               <div>
-                <div style={{ fontSize: 12, opacity: 0.7 }}>Average transaction</div>
+                <div style={{ fontSize: 12, opacity: 0.7 }}>Average transaction (USD)</div>
                 <div className="Metric">{summary.averageTransaction}</div>
               </div>
             </div>
@@ -275,7 +283,7 @@ export default function Transactions() {
           </Card>
         </div>
 
-        <Card title="Transaction List" subtitle="Supabase-backed table (transactions + categories)">
+        <Card title="Transaction List" subtitle="Supabase-backed table (transactions + categories) • Amounts shown in USD">
           {listState.loading ? (
             <SkeletonTable rows={7} columns={5} />
           ) : listState.error ? (
@@ -300,24 +308,32 @@ export default function Transactions() {
                     <th>Date</th>
                     <th>Merchant</th>
                     <th>Category</th>
-                    <th>Amount</th>
+                    <th>Amount (USD)</th>
                     <th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {listState.rows.map((t) => (
-                    <tr key={t.id}>
-                      <td>{safeDateLabel(t.date)}</td>
-                      <td>{t.merchant}</td>
-                      <td>{t.category}</td>
-                      <td>{formatAmount(t.amount)}</td>
-                      <td>
-                        <span className={`Pill ${t.status === "cleared" ? "PillSuccess" : t.status === "pending" ? "PillWarn" : ""}`}>
-                          {t.status || "—"}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+                  {listState.rows.map((t) => {
+                    const fmt = formatWithOriginal({
+                      amountUsd: t.amount_usd,
+                      originalAmount: t.original_amount,
+                      originalCurrency: t.currency
+                    });
+
+                    return (
+                      <tr key={t.id}>
+                        <td>{safeDateLabel(t.date)}</td>
+                        <td>{t.merchant}</td>
+                        <td>{t.category}</td>
+                        <td title={fmt.title}>{fmt.text}</td>
+                        <td>
+                          <span className={`Pill ${t.status === "cleared" ? "PillSuccess" : t.status === "pending" ? "PillWarn" : ""}`}>
+                            {t.status || "—"}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
 
@@ -325,7 +341,8 @@ export default function Transactions() {
 
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", fontSize: 12, opacity: 0.75 }}>
                 <span>
-                  Tip: seed expenses are negative amounts. Use min/max accordingly (e.g., <code>-200</code> to <code>0</code>).
+                  Tip: Hover the USD amount to see the original currency amount (when available). Filters still operate on the raw stored
+                  amount.
                 </span>
               </div>
             </>

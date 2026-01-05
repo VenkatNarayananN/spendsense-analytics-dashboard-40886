@@ -81,7 +81,7 @@ export default function Alerts() {
       <div className="PageHeader">
         <div>
           <h2>Alerts</h2>
-          <p>Monitor anomalies, budgets, and custom rules.</p>
+          <p>Monitor anomalies, budgets, and custom rules. (Spending totals elsewhere are normalized to USD.)</p>
         </div>
         <span className="Badge">
           <span aria-hidden="true">🔔</span> {summary}

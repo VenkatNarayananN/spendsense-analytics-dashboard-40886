@@ -1,4 +1,5 @@
 import { supabase } from "../supabaseClient";
+import { convertToUSD, formatMoneyUSD, getFxRates } from "../fx/openExchangeRates";
 
 /**
  * Data access helpers for SpendSense pages.
@@ -6,6 +7,11 @@ import { supabase } from "../supabaseClient";
  * - RLS-friendly (scoped by user_id when provided)
  * - tolerant of "no auth yet" (userId optional)
  * - safe (no secrets in UI; uses env-driven supabaseClient)
+ *
+ * Currency normalization:
+ * - We attempt to load OpenExchangeRates rates and compute `amount_usd`.
+ * - Each transaction includes `currency` (best-effort; falls back to "USD").
+ * - When rates are unavailable we fall back to last-good cached rates or skip conversion.
  */
 
 const DEFAULT_DEMO_USER_ID = "00000000-0000-0000-0000-000000000001";
@@ -16,6 +22,16 @@ const DEFAULT_DEMO_USER_ID = "00000000-0000-0000-0000-000000000001";
 function toNumberOrNull(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Normalize a currency code.
+ */
+function normalizeCurrency(value) {
+  const c = String(value || "USD").trim().toUpperCase();
+  // Keep it simple; accept 3-letter codes.
+  if (!c || c.length < 3) return "USD";
+  return c.slice(0, 3);
 }
 
 /**
@@ -36,8 +52,7 @@ function buildOccurredAtBounds(dateRange) {
   const from = fromRaw && !Number.isNaN(fromRaw.getTime()) ? new Date(fromRaw.setHours(0, 0, 0, 0)) : null;
 
   // Inclusive end-of-day bound for `to`.
-  const to =
-    toRaw && !Number.isNaN(toRaw.getTime()) ? new Date(toRaw.setHours(23, 59, 59, 999)) : null;
+  const to = toRaw && !Number.isNaN(toRaw.getTime()) ? new Date(toRaw.setHours(23, 59, 59, 999)) : null;
 
   return { from: from ? from.toISOString() : null, to: to ? to.toISOString() : null };
 }
@@ -60,13 +75,17 @@ function sumAmounts(rows) {
 }
 
 /**
- * Format a numeric amount to currency-ish string used by existing UI cards.
+ * Convert + sum in USD. Skips rows that cannot be converted.
  */
-function formatMoneyUSD(value) {
-  const n = toNumberOrNull(value);
-  if (!Number.isFinite(n)) return "$0.00";
-  const abs = Math.abs(n);
-  return `$${abs.toFixed(2)}`;
+function sumAmountsUSD(rows, rates) {
+  return (rows || []).reduce((acc, r) => {
+    const amount = toNumberOrNull(r?.amount);
+    if (!Number.isFinite(amount)) return acc;
+    const currency = normalizeCurrency(r?.currency || r?.currency_code || "USD");
+    const usd = convertToUSD({ amount, currency, rates });
+    if (!Number.isFinite(usd)) return acc;
+    return acc + usd;
+  }, 0);
 }
 
 /**
@@ -101,10 +120,18 @@ function requireSupabase() {
 }
 
 /**
+ * Get rates once per query function call, relying on internal caching.
+ */
+async function getRatesForConversion() {
+  const res = await getFxRates();
+  return res;
+}
+
+/**
  * PUBLIC_INTERFACE
  */
 export async function fetchDashboardSummaryFromSupabase({ userId, allowDemoUser = true } = {}) {
-  /** Fetch KPI summary from Supabase transactions for current month (simple, auth-friendly). */
+  /** Fetch KPI summary from Supabase transactions for current month (simple, auth-friendly), normalized to USD. */
   requireSupabase();
 
   const ctx = getUserContext({ userId, allowDemoUser });
@@ -112,7 +139,8 @@ export async function fetchDashboardSummaryFromSupabase({ userId, allowDemoUser 
 
   let q = supabase
     .from("transactions")
-    .select("amount, type, occurred_at", { count: "exact" })
+    // currency column name may vary; request a few common options.
+    .select("amount, type, occurred_at, currency, currency_code", { count: "exact" })
     .gte("occurred_at", start)
     .lt("occurred_at", end);
 
@@ -122,23 +150,31 @@ export async function fetchDashboardSummaryFromSupabase({ userId, allowDemoUser 
   const { data, error } = await q;
   if (error) throw error;
 
+  const { rates, usedFallback, warning } = await getRatesForConversion();
+
   // Expenses are typically negative in seed data; normalize spend to positive.
-  const total = sumAmounts(data);
-  const spend = Math.abs(total);
+  const totalUsd = rates ? sumAmountsUSD(data, rates) : sumAmounts(data);
+  const spendUsd = Math.abs(totalUsd);
 
   // Placeholder "budget remaining" until we wire budgets table into the dashboard.
   // Keep this derived from spend to feel real and stable.
-  const budgetLimit = Math.max(800, Math.round((spend * 1.35 + 500) * 100) / 100);
-  const remaining = Math.max(0, budgetLimit - spend);
+  const budgetLimit = Math.max(800, Math.round((spendUsd * 1.35 + 500) * 100) / 100);
+  const remaining = Math.max(0, budgetLimit - spendUsd);
 
   // Savings is a soft signal; for now use a gentle fraction of remaining.
   const savings = Math.max(0, remaining * 0.12);
 
   return {
-    thisMonthSpend: formatMoneyUSD(spend),
+    // Keep existing string outputs, but now in USD-normalized terms.
+    thisMonthSpend: formatMoneyUSD(spendUsd),
     budgetRemaining: formatMoneyUSD(remaining),
     savings: `+${formatMoneyUSD(savings)}`,
-    freshnessLabel: ctx.isDemo ? "Live (demo user)" : "Live"
+    freshnessLabel: ctx.isDemo ? "Live (demo user)" : "Live",
+    // New: expose rates status for non-blocking UI notice.
+    fx: {
+      usedFallback: Boolean(usedFallback),
+      warning: warning || null
+    }
   };
 }
 
@@ -146,7 +182,7 @@ export async function fetchDashboardSummaryFromSupabase({ userId, allowDemoUser 
  * PUBLIC_INTERFACE
  */
 export async function fetchRecentTransactionsFromSupabase({ userId, allowDemoUser = true, limit = 5 } = {}) {
-  /** Fetch most recent transactions for the dashboard "Recent Activity" table. */
+  /** Fetch most recent transactions for the dashboard "Recent Activity" table, including USD-normalized amounts. */
   requireSupabase();
 
   const ctx = getUserContext({ userId, allowDemoUser });
@@ -159,6 +195,8 @@ export async function fetchRecentTransactionsFromSupabase({ userId, allowDemoUse
       occurred_at,
       status,
       amount,
+      currency,
+      currency_code,
       merchant,
       description,
       memo,
@@ -177,14 +215,27 @@ export async function fetchRecentTransactionsFromSupabase({ userId, allowDemoUse
   const { data, error } = await q;
   if (error) throw error;
 
-  return (data || []).map((row) => ({
-    id: row.id,
-    date: row.occurred_at,
-    merchant: row.merchant || row.description || "—",
-    category: row.categories?.name || "—",
-    amount: toNumberOrNull(row.amount),
-    status: row.status
-  }));
+  const { rates, usedFallback, warning } = await getRatesForConversion();
+
+  return {
+    fx: { usedFallback: Boolean(usedFallback), warning: warning || null },
+    rows: (data || []).map((row) => {
+      const amount = toNumberOrNull(row.amount);
+      const currency = normalizeCurrency(row.currency || row.currency_code || "USD");
+      const amount_usd = rates ? convertToUSD({ amount, currency, rates }) : null;
+
+      return {
+        id: row.id,
+        date: row.occurred_at,
+        merchant: row.merchant || row.description || "—",
+        category: row.categories?.name || "—",
+        status: row.status,
+        currency,
+        original_amount: amount,
+        amount_usd: Number.isFinite(amount_usd) ? amount_usd : amount
+      };
+    })
+  };
 }
 
 /**
@@ -201,8 +252,10 @@ export async function fetchTransactionsPageFromSupabase({
    * Fetch paginated transactions with basic filters:
    * - dateRange (occurred_at gte/lte)
    * - categories (via join to categories + in by category_id)
-   * - amountMin/amountMax (amount gte/lte)
+   * - amountMin/amountMax (amount gte/lte) [NOTE: still applies to original amount field]
    * - search (merchant/description/memo/category name) via ilike
+   *
+   * Also returns `currency`, `original_amount`, and `amount_usd` (USD-normalized).
    */
   requireSupabase();
 
@@ -221,6 +274,8 @@ export async function fetchTransactionsPageFromSupabase({
       occurred_at,
       status,
       amount,
+      currency,
+      currency_code,
       merchant,
       description,
       memo,
@@ -258,19 +313,12 @@ export async function fetchTransactionsPageFromSupabase({
     const ids = (cats || []).map((c) => c.id);
     // If user selected categories that don't exist, return empty fast.
     if (ids.length === 0) {
-      return {
-        rows: [],
-        page: safePage,
-        pageSize: safePageSize,
-        total: 0
-      };
+      return { rows: [], page: safePage, pageSize: safePageSize, total: 0, fx: { usedFallback: false, warning: null } };
     }
     q = q.in("category_id", ids);
   }
 
-  // Search: OR across merchant/description/memo. Category name search needs join; we do a two-phase filter:
-  // Phase A: OR on tx textual fields via ilike.
-  // Phase B: If no results and search exists, try category name lookup and filter by category_id.
+  // Search: OR across merchant/description/memo. Category name search needs join; we do a two-phase filter.
   const search = String(filters.search || "").trim();
   if (search) {
     const term = `%${escapeForILike(search)}%`;
@@ -295,6 +343,8 @@ export async function fetchTransactionsPageFromSupabase({
           occurred_at,
           status,
           amount,
+          currency,
+          currency_code,
           merchant,
           description,
           memo,
@@ -324,18 +374,29 @@ export async function fetchTransactionsPageFromSupabase({
     }
   }
 
+  const { rates, usedFallback, warning } = await getRatesForConversion();
+
   return {
-    rows: (data || []).map((row) => ({
-      id: row.id,
-      date: row.occurred_at,
-      merchant: row.merchant || row.description || "—",
-      category: row.categories?.name || "—",
-      amount: toNumberOrNull(row.amount),
-      status: row.status
-    })),
+    rows: (data || []).map((row) => {
+      const amount = toNumberOrNull(row.amount);
+      const currency = normalizeCurrency(row.currency || row.currency_code || "USD");
+      const amount_usd = rates ? convertToUSD({ amount, currency, rates }) : null;
+
+      return {
+        id: row.id,
+        date: row.occurred_at,
+        merchant: row.merchant || row.description || "—",
+        category: row.categories?.name || "—",
+        status: row.status,
+        currency,
+        original_amount: amount,
+        amount_usd: Number.isFinite(amount_usd) ? amount_usd : amount
+      };
+    }),
     page: safePage,
     pageSize: safePageSize,
-    total: count || 0
+    total: count || 0,
+    fx: { usedFallback: Boolean(usedFallback), warning: warning || null }
   };
 }
 
@@ -343,12 +404,14 @@ export async function fetchTransactionsPageFromSupabase({
  * PUBLIC_INTERFACE
  */
 export async function fetchTransactionsSummaryFromSupabase({ userId, allowDemoUser = true, filters = {} } = {}) {
-  /** Fetch a small summary for Transactions page (totals/avg) using current filters. */
+  /** Fetch a small summary for Transactions page (totals/avg) using current filters, normalized to USD. */
   requireSupabase();
 
   const ctx = getUserContext({ userId, allowDemoUser });
 
-  let q = supabase.from("transactions").select("amount, occurred_at, merchant, description, memo", { count: "exact" });
+  let q = supabase.from("transactions").select("amount, currency, currency_code, occurred_at, merchant, description, memo", {
+    count: "exact"
+  });
   if (ctx.userId) q = q.eq("user_id", ctx.userId);
 
   const amountMin = toNumberOrNull(filters.amountMin);
@@ -369,15 +432,17 @@ export async function fetchTransactionsSummaryFromSupabase({ userId, allowDemoUs
   const { data, error } = await q;
   if (error) throw error;
 
-  const total = sumAmounts(data);
-  const spend = Math.abs(total);
-  const avg = data?.length ? spend / data.length : 0;
+  const { rates, usedFallback, warning } = await getRatesForConversion();
+
+  const totalUsd = rates ? sumAmountsUSD(data, rates) : sumAmounts(data);
+  const spendUsd = Math.abs(totalUsd);
+  const avgUsd = data?.length ? spendUsd / data.length : 0;
 
   return {
-    totalSpendFiltered: formatMoneyUSD(spend),
-    averageTransaction: formatMoneyUSD(avg),
-    // Helpful for UI trend bars if needed later
-    trendPercent: deriveTrendPercent(spend)
+    totalSpendFiltered: formatMoneyUSD(spendUsd),
+    averageTransaction: formatMoneyUSD(avgUsd),
+    trendPercent: deriveTrendPercent(spendUsd),
+    fx: { usedFallback: Boolean(usedFallback), warning: warning || null }
   };
 }
 
@@ -385,7 +450,7 @@ export async function fetchTransactionsSummaryFromSupabase({ userId, allowDemoUs
  * PUBLIC_INTERFACE
  */
 export async function fetchInsightsSummaryFromSupabase({ userId, allowDemoUser = true, timeRange = "30d", segment = "Category" } = {}) {
-  /** Fetch a lightweight insights summary; chart components remain placeholders but show real context + totals. */
+  /** Fetch a lightweight insights summary; chart components remain placeholders but show real context + totals (USD-normalized). */
   requireSupabase();
 
   const ctx = getUserContext({ userId, allowDemoUser });
@@ -401,7 +466,7 @@ export async function fetchInsightsSummaryFromSupabase({ userId, allowDemoUser =
 
   let q = supabase
     .from("transactions")
-    .select("amount, occurred_at, category_id", { count: "exact" })
+    .select("amount, currency, currency_code, occurred_at, category_id", { count: "exact" })
     .gte("occurred_at", start.toISOString());
 
   if (ctx.userId) q = q.eq("user_id", ctx.userId);
@@ -409,14 +474,18 @@ export async function fetchInsightsSummaryFromSupabase({ userId, allowDemoUser =
   const { data, error } = await q;
   if (error) throw error;
 
-  const spend = Math.abs(sumAmounts(data));
+  const { rates, usedFallback, warning } = await getRatesForConversion();
+
+  const totalUsd = rates ? sumAmountsUSD(data, rates) : sumAmounts(data);
+  const spendUsd = Math.abs(totalUsd);
 
   return {
     timeRange,
     segment,
     freshnessLabel: ctx.isDemo ? "Live (demo user)" : "Live",
-    totalSpend: formatMoneyUSD(spend),
-    txCount: data?.length || 0
+    totalSpend: formatMoneyUSD(spendUsd),
+    txCount: data?.length || 0,
+    fx: { usedFallback: Boolean(usedFallback), warning: warning || null }
   };
 }
 

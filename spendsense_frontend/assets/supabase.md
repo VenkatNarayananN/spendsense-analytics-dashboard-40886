@@ -39,3 +39,31 @@ Example (do not commit `.env`, use `.env.example` instead):
 - When authenticated, queries should be user-scoped using the Supabase user id when provided.
 - If RLS is enabled, ensure policies allow authenticated users to read their rows.
 
+## FX / USD Normalization (OpenExchangeRates)
+
+SpendSense normalizes monetary amounts to **USD** in the UI across Dashboard, Transactions, and Insights.
+
+### Required Environment Variables (frontend)
+
+Add to your `.env` (or set via deployment env vars):
+
+- `REACT_APP_OPENEXCHANGERATES_APP_ID` – OpenExchangeRates App ID (keep secret; do not commit)
+- `REACT_APP_BASE_CURRENCY` – Base currency for normalization (currently expected `USD`)
+
+These are documented in `.env.example`.
+
+### Refresh + Caching Behavior
+
+- Rates are fetched from `https://openexchangerates.org/api/latest.json` using `app_id`.
+- Rates are cached with:
+  - In-memory cache (for the current tab/session)
+  - `localStorage` cache (as a cross-refresh "last-good" fallback)
+- TTL is ~**1 hour**. When the network fails, the app will:
+  - fall back to the last-good cached rates, if available, and show a non-blocking toast
+  - otherwise show amounts without conversion
+
+### Security
+
+- The App ID is **never rendered** in the UI and is **not logged** by the client code.
+=======
+
