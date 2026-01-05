@@ -1,7 +1,10 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { Card } from "../components/ui";
 import { BarChartPlaceholder, LineChartPlaceholder } from "../components/charts/ChartPlaceholders";
 import { EmptyState, ErrorState, SegmentedControl, SkeletonCard } from "../components/ux";
+import ToastNotice from "../components/ToastNotice";
+import { fetchInsightsSummary } from "../lib/data/dashboardData";
+import { useTransactionsRealtime } from "../hooks/useTransactionsRealtime";
 
 const TIME_RANGE_OPTIONS = [
   { value: "7d", label: "7d" },
@@ -25,6 +28,8 @@ export default function Insights() {
   // Demo-only UI states (no real fetch yet).
   const [uiState, setUiState] = useState("ready"); // "loading" | "empty" | "error" | "ready"
 
+  const [freshnessLabel, setFreshnessLabel] = useState("Updated just now");
+
   const context = useMemo(() => {
     const rangeLabel = TIME_RANGE_OPTIONS.find((o) => o.value === timeRange)?.label || timeRange;
     return {
@@ -33,15 +38,31 @@ export default function Insights() {
     };
   }, [timeRange, segment]);
 
+  const refreshInsights = useCallback(async () => {
+    try {
+      const next = await fetchInsightsSummary({ timeRange, segment });
+      setFreshnessLabel(next?.freshnessLabel || "Updated just now");
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[SpendSense] Failed to refresh insights (placeholder).", e);
+    }
+  }, [segment, timeRange]);
+
+  const { notice } = useTransactionsRealtime({
+    onRefreshRequested: refreshInsights
+  });
+
   return (
     <>
+      <ToastNotice message={notice} />
+
       <div className="PageHeader">
         <div>
           <h2>Insights</h2>
           <p>Highlights that help you understand patterns and optimize spending.</p>
         </div>
-        <span className="Badge">
-          <span aria-hidden="true">✨</span> Time: {context.rangeLabel} • Segment: {context.segment}
+        <span className="Badge" aria-label="Insights context">
+          <span aria-hidden="true">✨</span> Time: {context.rangeLabel} • Segment: {context.segment} • {freshnessLabel}
         </span>
       </div>
 

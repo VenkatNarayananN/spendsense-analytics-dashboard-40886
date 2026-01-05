@@ -1,7 +1,10 @@
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Card, MetricCard } from "../components/ui";
 import { LineChartPlaceholder, PieChartPlaceholder } from "../components/charts/ChartPlaceholders";
 import { EmptyState, ErrorState, SkeletonCard, SkeletonTable } from "../components/ux";
+import ToastNotice from "../components/ToastNotice";
+import { fetchDashboardSummary } from "../lib/data/dashboardData";
+import { useTransactionsRealtime } from "../hooks/useTransactionsRealtime";
 
 // PUBLIC_INTERFACE
 export default function Dashboard() {
@@ -10,15 +13,49 @@ export default function Dashboard() {
   // Demo-only UI state toggles (no backend fetch yet).
   const [uiState, setUiState] = useState("ready"); // "loading" | "empty" | "error" | "ready"
 
+  // Lightweight, local "data" state to demonstrate refresh signals.
+  const [summary, setSummary] = useState({
+    thisMonthSpend: "$3,482.10",
+    budgetRemaining: "$1,217.90",
+    savings: "+$164.00",
+    freshnessLabel: "Updated just now"
+  });
+
+  const refreshSummary = useCallback(async () => {
+    try {
+      const next = await fetchDashboardSummary();
+      setSummary(next);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[SpendSense] Failed to refresh dashboard summary (placeholder).", e);
+    }
+  }, []);
+
+  // Fetch once on mount (placeholder).
+  useEffect(() => {
+    refreshSummary();
+  }, [refreshSummary]);
+
+  const { notice } = useTransactionsRealtime({
+    onRefreshRequested: refreshSummary
+  });
+
+  const freshnessText = useMemo(() => {
+    if (uiState !== "ready") return `State: ${uiState}`;
+    return summary.freshnessLabel || "Updated just now";
+  }, [summary.freshnessLabel, uiState]);
+
   return (
     <>
+      <ToastNotice message={notice} />
+
       <div className="PageHeader">
         <div>
           <h2>Dashboard</h2>
           <p>Key metrics, trends, and quick signals across your spending.</p>
         </div>
         <span className="Badge" aria-label="Data freshness">
-          <span aria-hidden="true">⏱️</span> {uiState === "ready" ? "Updated just now" : `State: ${uiState}`}
+          <span aria-hidden="true">⏱️</span> {freshnessText}
         </span>
       </div>
 
@@ -36,7 +73,8 @@ export default function Dashboard() {
           </select>
         </div>
         <div style={{ fontSize: 13, opacity: 0.8 }}>
-          This dashboard uses skeleton loaders and empty/error states to model real data fetching later.
+          This dashboard uses skeleton loaders and empty/error states to model real data fetching later. When Supabase is
+          configured, it also listens for live transaction inserts and refreshes KPIs.
         </div>
       </div>
 
@@ -83,9 +121,9 @@ export default function Dashboard() {
       ) : (
         <>
           <div className="Grid GridCols3">
-            <MetricCard title="This Month" subtitle="Total spend" value="$3,482.10" trendPercent={72} />
-            <MetricCard title="Budget Health" subtitle="Remaining" value="$1,217.90" trendPercent={48} />
-            <MetricCard title="Savings" subtitle="vs. last month" value="+$164.00" trendPercent={64} />
+            <MetricCard title="This Month" subtitle="Total spend" value={summary.thisMonthSpend} trendPercent={72} />
+            <MetricCard title="Budget Health" subtitle="Remaining" value={summary.budgetRemaining} trendPercent={48} />
+            <MetricCard title="Savings" subtitle="vs. last month" value={summary.savings} trendPercent={64} />
           </div>
 
           <div style={{ height: 14 }} />

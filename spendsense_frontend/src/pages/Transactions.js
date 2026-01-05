@@ -1,6 +1,16 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { Card } from "../components/ui";
 import { DateRangePicker, EmptyState, ErrorState, FilterBar, MultiSelect, SkeletonTable } from "../components/ux";
+import ToastNotice from "../components/ToastNotice";
+import { fetchTransactionsSummary } from "../lib/data/dashboardData";
+import { useTransactionsRealtime } from "../hooks/useTransactionsRealtime";
+
+function formatAmount(amount) {
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return "-$—";
+  const sign = n > 0 ? "-" : ""; // spend is often positive in DB; UI shows negative.
+  return `${sign}$${Math.abs(n).toFixed(2)}`;
+}
 
 // PUBLIC_INTERFACE
 export default function Transactions() {
@@ -27,6 +37,69 @@ export default function Transactions() {
 
   // Demo-only UI states (no real fetch yet).
   const [uiState, setUiState] = useState("ready"); // "loading" | "empty" | "error" | "ready"
+
+  // Placeholder in-memory list (so realtime can append/prepend without requiring real fetch wiring).
+  const [transactions, setTransactions] = useState([
+    {
+      id: "seed-1",
+      date: "2026-01-05",
+      merchant: "Silver Streaming",
+      category: "Subscriptions",
+      amount: 12.99,
+      flag: "Review"
+    },
+    {
+      id: "seed-2",
+      date: "2026-01-04",
+      merchant: "Rose Market",
+      category: "Groceries",
+      amount: 96.72,
+      flag: "—"
+    },
+    {
+      id: "seed-3",
+      date: "2026-01-03",
+      merchant: "Ocean Café",
+      category: "Dining",
+      amount: 18.4,
+      flag: "OK"
+    }
+  ]);
+
+  const [summary, setSummary] = useState({
+    totalSpendFiltered: "$1,204.33",
+    averageTransaction: "$24.09"
+  });
+
+  const refreshSummaries = useCallback(async () => {
+    try {
+      const next = await fetchTransactionsSummary();
+      setSummary(next);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[SpendSense] Failed to refresh transaction summaries (placeholder).", e);
+    }
+  }, []);
+
+  const { notice } = useTransactionsRealtime({
+    onInsert: (tx) => {
+      // Only update the in-memory list when list is "mounted"/visible (ready state).
+      if (uiState !== "ready") return;
+      if (!tx) return;
+
+      const next = {
+        id: tx.id ?? tx.transaction_id ?? `rt-${Date.now()}`,
+        date: String(tx.date || "").slice(0, 10) || new Date().toISOString().slice(0, 10),
+        merchant: tx.merchant ?? "New transaction",
+        category: tx.category ?? "—",
+        amount: tx.amount ?? null,
+        flag: "New"
+      };
+
+      setTransactions((prev) => [next, ...prev].slice(0, 12));
+    },
+    onRefreshRequested: refreshSummaries
+  });
 
   const onClearAll = () => {
     setFilters({ dateRange: { from: "", to: "" }, categories: [], amountMin: "", amountMax: "", search: "" });
@@ -59,6 +132,8 @@ export default function Transactions() {
 
   return (
     <>
+      <ToastNotice message={notice} />
+
       <div className="PageHeader">
         <div>
           <h2>Transactions</h2>
@@ -130,7 +205,9 @@ export default function Transactions() {
               <option value="empty">Empty</option>
               <option value="error">Error</option>
             </select>
-            <div className="FieldHelp">This toggles loading/empty/error UI (no backend).</div>
+            <div className="FieldHelp">
+              This toggles loading/empty/error UI (no backend). Realtime inserts will also refresh summaries.
+            </div>
           </div>
         </FilterBar>
 
@@ -139,18 +216,25 @@ export default function Transactions() {
             <div className="Grid" style={{ gap: 10 }}>
               <div>
                 <div style={{ fontSize: 12, opacity: 0.7 }}>Total spend (filtered)</div>
-                <div className="Metric">$1,204.33</div>
+                <div className="Metric">{summary.totalSpendFiltered}</div>
               </div>
               <div>
                 <div style={{ fontSize: 12, opacity: 0.7 }}>Average transaction</div>
-                <div className="Metric">$24.09</div>
+                <div className="Metric">{summary.averageTransaction}</div>
               </div>
             </div>
           </Card>
 
           <Card title="Actions" subtitle="Helpful shortcuts">
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button className="Button ButtonPrimary" type="button" onClick={() => setUiState("loading")}>
+              <button
+                className="Button ButtonPrimary"
+                type="button"
+                onClick={() => {
+                  setUiState("loading");
+                  refreshSummaries();
+                }}
+              >
                 Simulate load
               </button>
               <button className="Button" type="button" onClick={() => setUiState("empty")}>
@@ -196,33 +280,19 @@ export default function Transactions() {
                 </tr>
               </thead>
               <tbody>
-                <tr>
-                  <td>2026-01-05</td>
-                  <td>Silver Streaming</td>
-                  <td>Subscriptions</td>
-                  <td>-$12.99</td>
-                  <td>
-                    <span className="Pill PillWarn">Review</span>
-                  </td>
-                </tr>
-                <tr>
-                  <td>2026-01-04</td>
-                  <td>Rose Market</td>
-                  <td>Groceries</td>
-                  <td>-$96.72</td>
-                  <td>
-                    <span className="Pill">—</span>
-                  </td>
-                </tr>
-                <tr>
-                  <td>2026-01-03</td>
-                  <td>Ocean Café</td>
-                  <td>Dining</td>
-                  <td>-$18.40</td>
-                  <td>
-                    <span className="Pill PillSuccess">OK</span>
-                  </td>
-                </tr>
+                {transactions.map((t) => (
+                  <tr key={t.id}>
+                    <td>{String(t.date).slice(0, 10)}</td>
+                    <td>{t.merchant}</td>
+                    <td>{t.category}</td>
+                    <td>{formatAmount(t.amount)}</td>
+                    <td>
+                      <span className={`Pill ${t.flag === "Review" ? "PillWarn" : t.flag === "OK" ? "PillSuccess" : ""}`}>
+                        {t.flag}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           )}
