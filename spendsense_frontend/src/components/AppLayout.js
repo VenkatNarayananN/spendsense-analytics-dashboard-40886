@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import "../App.css";
 
@@ -19,11 +19,82 @@ function getPageMeta(pathname) {
   return { title: "SpendSense", subtitle: "Analytics dashboard." };
 }
 
+function MobileNav({ isOpen, onClose, items }) {
+  return (
+    <div className={`MobileNavOverlay ${isOpen ? "MobileNavOverlayOpen" : ""}`} aria-hidden={!isOpen}>
+      <button
+        type="button"
+        className="MobileNavBackdrop"
+        onClick={onClose}
+        tabIndex={isOpen ? 0 : -1}
+        aria-label="Close navigation menu"
+      />
+      <aside
+        className={`MobileNavDrawer ${isOpen ? "MobileNavDrawerOpen" : ""}`}
+        aria-label="Mobile navigation drawer"
+      >
+        <div className="MobileNavHeader">
+          <div className="Brand" style={{ padding: 0 }}>
+            <div className="BrandMark" aria-hidden="true" />
+            <div className="BrandTitle">
+              <strong>SpendSense</strong>
+              <span>Ocean Professional</span>
+            </div>
+          </div>
+
+          <button className="IconButton" type="button" onClick={onClose} aria-label="Close menu">
+            ✕
+          </button>
+        </div>
+
+        <nav className="NavGroup" style={{ marginTop: 12 }}>
+          {items.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.to === "/"}
+              onClick={onClose}
+              className={({ isActive }) => `NavItem ${isActive ? "NavItemActive" : ""}`}
+            >
+              <span className="NavIcon" aria-hidden="true">
+                {item.icon}
+              </span>
+              <span className="NavMeta">
+                <strong>{item.label}</strong>
+                <span>{item.desc}</span>
+              </span>
+            </NavLink>
+          ))}
+        </nav>
+      </aside>
+    </div>
+  );
+}
+
 // PUBLIC_INTERFACE
 export default function AppLayout() {
-  /** Shared application layout: left sidebar navigation + top header + routed content outlet. */
+  /** Shared application layout: left sidebar navigation + responsive top header + routed content outlet. */
   const location = useLocation();
-  const meta = getPageMeta(location.pathname);
+  const meta = useMemo(() => getPageMeta(location.pathname), [location.pathname]);
+
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  // Close mobile nav whenever route changes.
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [location.pathname]);
+
+  // Escape to close for accessibility.
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") setMobileNavOpen(false);
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [mobileNavOpen]);
 
   return (
     <div className="AppShell">
@@ -58,9 +129,22 @@ export default function AppLayout() {
 
       <main className="Main">
         <header className="Topbar" aria-label="Header">
-          <div className="TopbarTitle">
-            <h1>{meta.title}</h1>
-            <p>{meta.subtitle}</p>
+          <div className="TopbarLeft">
+            <button
+              className="IconButton MobileOnly"
+              type="button"
+              onClick={() => setMobileNavOpen(true)}
+              aria-label="Open navigation menu"
+              aria-haspopup="dialog"
+              aria-expanded={mobileNavOpen}
+            >
+              ☰
+            </button>
+
+            <div className="TopbarTitle">
+              <h1>{meta.title}</h1>
+              <p>{meta.subtitle}</p>
+            </div>
           </div>
 
           <div className="TopbarActions">
@@ -81,6 +165,8 @@ export default function AppLayout() {
             </button>
           </div>
         </header>
+
+        <MobileNav isOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} items={NAV_ITEMS} />
 
         <section className="Page" aria-label={`${meta.title} page content`}>
           <Outlet />

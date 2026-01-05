@@ -2,6 +2,7 @@ import React from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import "./App.css";
 import AppLayout from "./components/AppLayout";
+import ProtectedRoute from "./components/ProtectedRoute";
 import Dashboard from "./pages/Dashboard";
 import Transactions from "./pages/Transactions";
 import Insights from "./pages/Insights";
@@ -17,8 +18,22 @@ function App() {
         <Route element={<AppLayout />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/transactions" element={<Transactions />} />
-          <Route path="/insights" element={<Insights />} />
-          <Route path="/alerts" element={<Alerts />} />
+          <Route
+            path="/insights"
+            element={
+              <ProtectedRoute>
+                <Insights />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/alerts"
+            element={
+              <ProtectedRoute>
+                <Alerts />
+              </ProtectedRoute>
+            }
+          />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

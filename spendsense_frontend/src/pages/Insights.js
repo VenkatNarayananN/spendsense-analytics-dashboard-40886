@@ -1,5 +1,6 @@
 import React from "react";
-import { Card, PlaceholderChart } from "../components/ui";
+import { Card } from "../components/ui";
+import { BarChartPlaceholder, LineChartPlaceholder } from "../components/charts/ChartPlaceholders";
 
 // PUBLIC_INTERFACE
 export default function Insights() {
@@ -22,11 +23,11 @@ export default function Insights() {
           subtitle="What influenced spend this month"
           actions={<button className="Button" type="button">Export</button>}
         >
-          <PlaceholderChart label="Stacked bar chart placeholder" />
+          <BarChartPlaceholder title="Top Drivers" subtitle="Stacked bar chart placeholder" />
         </Card>
 
         <Card title="Merchant Concentration" subtitle="Where you spend most often">
-          <PlaceholderChart label="Ranked list / treemap placeholder" />
+          <LineChartPlaceholder title="Merchant Concentration" subtitle="Ranked list / treemap placeholder" />
         </Card>
       </div>
 

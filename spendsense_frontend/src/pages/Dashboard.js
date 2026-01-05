@@ -1,5 +1,6 @@
 import React from "react";
-import { Card, MetricCard, PlaceholderChart } from "../components/ui";
+import { Card, MetricCard } from "../components/ui";
+import { LineChartPlaceholder, PieChartPlaceholder } from "../components/charts/ChartPlaceholders";
 
 // PUBLIC_INTERFACE
 export default function Dashboard() {
@@ -26,11 +27,11 @@ export default function Dashboard() {
 
       <div className="Grid GridCols2">
         <Card title="Spending Trend" subtitle="Last 30 days">
-          <PlaceholderChart label="Line/Area chart placeholder" />
+          <LineChartPlaceholder title="Spending Trend" subtitle="Line/area chart placeholder" />
         </Card>
 
         <Card title="Category Breakdown" subtitle="Top categories">
-          <PlaceholderChart label="Donut chart placeholder" />
+          <PieChartPlaceholder title="Category Breakdown" subtitle="Donut/pie chart placeholder" />
         </Card>
       </div>
 
