@@ -1,3 +1,6 @@
+import { getEnv, optionalEnv } from "../env";
+import { createApiClient } from "../http/apiClient";
+
 const OXR_ENDPOINT = "https://openexchangerates.org/api/latest.json";
 
 // Storage keys are namespaced to avoid collisions.
@@ -92,12 +95,16 @@ function ttlMsFromEnv() {
 }
 
 function getEnvAppId() {
-  // CRA embeds env vars at build time.
-  return process.env.REACT_APP_OPENEXCHANGERATES_APP_ID || "";
+  // Not part of the new required env set, but still supported for existing installs.
+  // Never log it.
+  return optionalEnv("REACT_APP_OPENEXCHANGERATES_APP_ID", "");
 }
 
 function getEnvBaseCurrency() {
-  return (process.env.REACT_APP_BASE_CURRENCY || "USD").toUpperCase();
+  // Prefer new key; fall back to legacy key to avoid breaking existing setups.
+  const env = getEnv();
+  const legacy = optionalEnv("REACT_APP_BASE_CURRENCY", "USD");
+  return String(env.REACT_APP_OXR_BASE_CURRENCY || legacy || "USD").toUpperCase();
 }
 
 /**
@@ -105,19 +112,30 @@ function getEnvBaseCurrency() {
  * Note: we do NOT log the URL (contains the app_id), and we do NOT log the key.
  */
 async function fetchRatesFromNetwork() {
+  const env = getEnv();
+  if (env.REACT_APP_OXR_ENABLED === false) {
+    throw new Error("OpenExchangeRates is disabled (REACT_APP_OXR_ENABLED=false).");
+  }
+
   const appId = getEnvAppId();
   if (!appId) {
     throw new Error("OpenExchangeRates is not configured (missing REACT_APP_OPENEXCHANGERATES_APP_ID).");
   }
 
+  // Do NOT log URL (contains app_id).
   const url = `${OXR_ENDPOINT}?app_id=${encodeURIComponent(appId)}`;
 
-  const res = await fetch(url, { method: "GET" });
-  if (!res.ok) {
-    throw new Error(`Rates request failed (${res.status}).`);
-  }
+  // Use our API client for timeout/retry even though this is a public endpoint.
+  const oxrClient = createApiClient("", {
+    timeoutMs: 10_000,
+    maxRetries: 3
+  });
 
-  const json = await res.json();
+  const json = await oxrClient.get(url, {
+    // Ensure we always accept JSON
+    headers: { accept: "application/json" }
+  });
+
   if (!isValidRatesPayload(json)) {
     throw new Error("Rates response invalid.");
   }
