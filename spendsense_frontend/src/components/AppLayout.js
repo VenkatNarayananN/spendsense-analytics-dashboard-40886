@@ -38,7 +38,7 @@ function MobileNav({ isOpen, onClose, items }) {
             <div className="BrandMark" aria-hidden="true" />
             <div className="BrandTitle">
               <strong>SpendSense</strong>
-              <span>Ocean Professional</span>
+              <span>Fintech Modern</span>
             </div>
           </div>
 
@@ -103,7 +103,7 @@ export default function AppLayout() {
           <div className="BrandMark" aria-hidden="true" />
           <div className="BrandTitle">
             <strong>SpendSense</strong>
-            <span>Ocean Professional</span>
+            <span>Fintech Modern</span>
           </div>
         </div>
 

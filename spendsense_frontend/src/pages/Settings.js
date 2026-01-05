@@ -20,7 +20,7 @@ export default function Settings() {
       </div>
 
       <div className="Grid GridCols2">
-        <Card title="Appearance" subtitle="Ocean Professional (light)">
+        <Card title="Appearance" subtitle="Fintech Modern (light)">
           <div style={{ display: "grid", gap: 10 }}>
             <div style={{ fontSize: 13, opacity: 0.85 }}>
               Theme is configured via CSS variables to ensure consistent colors across components.
