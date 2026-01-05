@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import "../App.css";
+import UserMenu from "./UserMenu";
 
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard", desc: "Overview & KPIs", icon: "📊" },
@@ -75,8 +76,11 @@ function MobileNav({ isOpen, onClose, items }) {
 export default function AppLayout() {
   /** Shared application layout: left sidebar navigation + responsive top header + routed content outlet. */
   const location = useLocation();
-  const meta = useMemo(() => getPageMeta(location.pathname), [location.pathname]);
 
+  // Only Landing is public. Also render callback without chrome to avoid flashing the app shell.
+  const isPublicRoute = location.pathname === "/" || location.pathname.startsWith("/auth/callback");
+
+  const meta = useMemo(() => getPageMeta(location.pathname), [location.pathname]);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   // Close mobile nav whenever route changes.
@@ -95,6 +99,11 @@ export default function AppLayout() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [mobileNavOpen]);
+
+  if (isPublicRoute) {
+    // Minimal chrome for Landing/AuthCallback.
+    return <Outlet />;
+  }
 
   return (
     <div className="AppShell">
@@ -151,18 +160,15 @@ export default function AppLayout() {
             <label className="SrOnly" htmlFor="ss-search">
               Search
             </label>
-            <input
-              id="ss-search"
-              className="SearchInput"
-              placeholder="Search transactions, merchants…"
-              aria-label="Search"
-            />
+            <input id="ss-search" className="SearchInput" placeholder="Search transactions, merchants…" aria-label="Search" />
             <button className="Button ButtonPrimary" type="button">
               + Add
             </button>
             <button className="Button" type="button" aria-label="Notifications">
               🔔
             </button>
+
+            <UserMenu />
           </div>
         </header>
 

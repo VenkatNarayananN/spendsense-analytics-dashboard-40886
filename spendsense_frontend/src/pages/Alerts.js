@@ -4,6 +4,7 @@ import { EmptyState, ErrorState, FilterBar, SkeletonTable } from "../components/
 import ToastNotice from "../components/ToastNotice";
 import { useTransactionsRealtime } from "../hooks/useTransactionsRealtime";
 import { fetchAlertsFromSupabase } from "../lib/data/supabaseQueries";
+import { getAuthenticatedUserId } from "../auth/userContext";
 
 function severityPillClass(severity) {
   if (severity === "high") return "PillError";
@@ -40,7 +41,9 @@ export default function Alerts() {
   const refreshAlerts = useCallback(async () => {
     try {
       setState((p) => ({ ...p, loading: true, error: null }));
+      const userId = await getAuthenticatedUserId();
       const data = await fetchAlertsFromSupabase({
+        userId,
         allowDemoUser: true,
         status: filters.status,
         severity: filters.severity,

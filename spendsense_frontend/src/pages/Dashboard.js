@@ -6,6 +6,7 @@ import ToastNotice from "../components/ToastNotice";
 import { fetchDashboardSummary } from "../lib/data/dashboardData";
 import { useTransactionsRealtime } from "../hooks/useTransactionsRealtime";
 import { fetchRecentTransactionsFromSupabase } from "../lib/data/supabaseQueries";
+import { getAuthenticatedUserId } from "../auth/userContext";
 
 function formatAmount(amount) {
   const n = Number(amount);
@@ -42,7 +43,8 @@ export default function Dashboard() {
   const refreshRecent = useCallback(async () => {
     try {
       setRecentState((p) => ({ ...p, loading: true, error: null }));
-      const rows = await fetchRecentTransactionsFromSupabase({ allowDemoUser: true, limit: 6 });
+      const userId = await getAuthenticatedUserId();
+      const rows = await fetchRecentTransactionsFromSupabase({ userId, allowDemoUser: true, limit: 6 });
       setRecentState({ loading: false, error: null, data: rows || [] });
     } catch (e) {
       setRecentState({ loading: false, error: e?.message || String(e), data: [] });

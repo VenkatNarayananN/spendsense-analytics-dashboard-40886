@@ -5,6 +5,7 @@ import ToastNotice from "../components/ToastNotice";
 import { fetchTransactionsSummary } from "../lib/data/dashboardData";
 import { useTransactionsRealtime } from "../hooks/useTransactionsRealtime";
 import { fetchTransactionsPageFromSupabase } from "../lib/data/supabaseQueries";
+import { getAuthenticatedUserId } from "../auth/userContext";
 
 function formatAmount(amount) {
   const n = Number(amount);
@@ -67,7 +68,9 @@ export default function Transactions() {
       const nextPage = opts.page ?? page;
       try {
         setListState((p) => ({ ...p, loading: true, error: null }));
+        const userId = await getAuthenticatedUserId();
         const res = await fetchTransactionsPageFromSupabase({
+          userId,
           allowDemoUser: true,
           page: nextPage,
           pageSize,

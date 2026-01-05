@@ -9,21 +9,25 @@ import {
   fetchInsightsSummaryFromSupabase,
   fetchTransactionsSummaryFromSupabase
 } from "./supabaseQueries";
+import { getAuthenticatedUserId } from "../../auth/userContext";
 
 // PUBLIC_INTERFACE
 export async function fetchDashboardSummary() {
-  /** Fetch dashboard KPI summary via Supabase (transactions table). */
-  return fetchDashboardSummaryFromSupabase({ allowDemoUser: true });
+  /** Fetch dashboard KPI summary via Supabase (transactions table). Prefers authenticated user when present. */
+  const userId = await getAuthenticatedUserId();
+  return fetchDashboardSummaryFromSupabase({ userId, allowDemoUser: true });
 }
 
 // PUBLIC_INTERFACE
 export async function fetchInsightsSummary({ timeRange, segment }) {
-  /** Fetch insights summary via Supabase for timeRange/segment context. */
-  return fetchInsightsSummaryFromSupabase({ timeRange, segment, allowDemoUser: true });
+  /** Fetch insights summary via Supabase for timeRange/segment context. Prefers authenticated user when present. */
+  const userId = await getAuthenticatedUserId();
+  return fetchInsightsSummaryFromSupabase({ userId, timeRange, segment, allowDemoUser: true });
 }
 
 // PUBLIC_INTERFACE
 export async function fetchTransactionsSummary(filters = {}) {
-  /** Fetch transactions summary via Supabase, using current filters (where applicable). */
-  return fetchTransactionsSummaryFromSupabase({ filters, allowDemoUser: true });
+  /** Fetch transactions summary via Supabase, using current filters (where applicable). Prefers authenticated user when present. */
+  const userId = await getAuthenticatedUserId();
+  return fetchTransactionsSummaryFromSupabase({ userId, filters, allowDemoUser: true });
 }

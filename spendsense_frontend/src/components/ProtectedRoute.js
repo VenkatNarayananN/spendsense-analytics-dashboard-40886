@@ -1,56 +1,57 @@
 import React from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import "../App.css";
-
-/**
- * Local, temporary auth stub. Replace this with real auth integration later.
- * Intentionally conservative: defaults to "allowed" so routes keep working by default.
- */
-function useAuthStub() {
-  // In the future, this can read from Supabase session, a JWT, or global app state.
-  return { isAuthenticated: true };
-}
+import { useAuth } from "../auth/AuthContext";
 
 // PUBLIC_INTERFACE
 export default function ProtectedRoute({ children, redirectTo = "/" }) {
-  /** Protected route scaffolding. If user is not authenticated, shows a placeholder guard screen. */
-  const { isAuthenticated } = useAuthStub();
+  /** Protects routes by requiring a Supabase-authenticated session. */
+  const { user, loading } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
 
-  if (isAuthenticated) return children;
+  // While session is being resolved, show a lightweight guard skeleton.
+  if (loading) {
+    return (
+      <div className="Card" role="status" aria-live="polite">
+        <div className="CardHeader">
+          <div className="CardTitle">
+            <strong>Checking your session…</strong>
+            <span>Just a moment</span>
+          </div>
+        </div>
+        <div className="Skeleton" style={{ height: 64, borderRadius: 10 }} />
+      </div>
+    );
+  }
 
-  // If you prefer a redirect instead of a placeholder screen, swap this return with:
-  // return <Navigate to={redirectTo} replace state={{ from: location }} />;
+  if (user) return children;
+
   return (
     <div className="Card" role="alert" aria-live="polite">
       <div className="CardHeader">
         <div className="CardTitle">
-          <strong>Protected page (placeholder)</strong>
-          <span>Authentication is not wired yet.</span>
+          <strong>Sign-in required</strong>
+          <span>Access to this page is protected.</span>
         </div>
       </div>
 
-      <p style={{ margin: 0, fontSize: 13, opacity: 0.85 }}>
-        You attempted to access: <code>{location.pathname}</code>
+      <p style={{ margin: 0, fontSize: 13, opacity: 0.85, lineHeight: 1.5 }}>
+        You tried to open <code>{location.pathname}</code>, but you’re not signed in. Please return to the landing page and sign in with
+        Google to continue.
       </p>
 
       <div style={{ height: 12 }} />
 
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <button className="Button ButtonPrimary" type="button" onClick={() => window.history.back()}>
+      <div className="StateActions">
+        <button className="Button ButtonPrimary" type="button" onClick={() => navigate(redirectTo, { replace: true })}>
+          Go to Landing
+        </button>
+        <button className="Button" type="button" onClick={() => window.history.back()}>
           Go back
         </button>
-        <NavigateButton to={redirectTo} label="Return home" />
       </div>
     </div>
   );
 }
 
-// Small internal helper for navigation without introducing extra dependencies/hooks here.
-function NavigateButton({ to, label }) {
-  return (
-    <a className="Button" href={to} style={{ textDecoration: "none", display: "inline-flex", alignItems: "center" }}>
-      {label}
-    </a>
-  );
-}

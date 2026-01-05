@@ -8,37 +8,69 @@ import Transactions from "./pages/Transactions";
 import Insights from "./pages/Insights";
 import Alerts from "./pages/Alerts";
 import Settings from "./pages/Settings";
+import Landing from "./pages/Landing";
+import AuthCallback from "./pages/AuthCallback";
+import { AuthProvider } from "./auth/AuthContext";
 
 // PUBLIC_INTERFACE
 function App() {
-  /** Application entry: provides client-side routing and the shared layout (sidebar + header). */
+  /** Application entry: provides auth context + client-side routing and the shared layout (sidebar + header). */
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route element={<AppLayout />}>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/transactions" element={<Transactions />} />
-          <Route
-            path="/insights"
-            element={
-              <ProtectedRoute>
-                <Insights />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/alerts"
-            element={
-              <ProtectedRoute>
-                <Alerts />
-              </ProtectedRoute>
-            }
-          />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route element={<AppLayout />}>
+            {/* Public routes */}
+            <Route path="/" element={<Landing />} />
+            <Route path="/auth/callback" element={<AuthCallback />} />
+
+            {/* Protected routes */}
+            <Route
+              path="/dashboard"
+              element={
+                <ProtectedRoute redirectTo="/">
+                  <Dashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/transactions"
+              element={
+                <ProtectedRoute redirectTo="/">
+                  <Transactions />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/insights"
+              element={
+                <ProtectedRoute redirectTo="/">
+                  <Insights />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/alerts"
+              element={
+                <ProtectedRoute redirectTo="/">
+                  <Alerts />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/settings"
+              element={
+                <ProtectedRoute redirectTo="/">
+                  <Settings />
+                </ProtectedRoute>
+              }
+            />
+
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
   );
 }
 
