@@ -5,6 +5,7 @@ import ToastNotice from "../components/ToastNotice";
 import { useTransactionsRealtime } from "../hooks/useTransactionsRealtime";
 import { fetchAlertsFromSupabase } from "../lib/data/supabaseQueries";
 import { getAuthenticatedUserId } from "../auth/userContext";
+import { getBackendClient } from "../lib/api/backendClient";
 
 function severityPillClass(severity) {
   if (severity === "high") return "PillError";
@@ -30,17 +31,40 @@ export default function Alerts() {
   });
 
   const [state, setState] = useState({ loading: true, error: null, data: [] });
+  const [backendSummary, setBackendSummary] = useState(null);
 
   const summary = useMemo(() => {
     const parts = [];
     if (filters.status && filters.status !== "all") parts.push(`Status: ${filters.status}`);
     if (filters.severity && filters.severity !== "all") parts.push(`Severity: ${filters.severity}`);
+
+    if (backendSummary) {
+      parts.push(
+        `Rules: ${backendSummary.rules?.active ?? 0}/${backendSummary.rules?.total ?? 0}`,
+        `Triggered: ${backendSummary.triggered?.active ?? 0}/${backendSummary.triggered?.total ?? 0}`
+      );
+    }
+
     return parts.length ? parts.join(" • ") : "All alerts";
-  }, [filters]);
+  }, [backendSummary, filters]);
 
   const refreshAlerts = useCallback(async () => {
     try {
       setState((p) => ({ ...p, loading: true, error: null }));
+
+      // Best-effort backend summary (doesn't block list rendering)
+      const backend = getBackendClient();
+      if (backend) {
+        try {
+          const s = await backend.alerts.summary();
+          setBackendSummary(s || null);
+        } catch {
+          setBackendSummary(null);
+        }
+      } else {
+        setBackendSummary(null);
+      }
+
       const userId = await getAuthenticatedUserId();
       const data = await fetchAlertsFromSupabase({
         userId,

@@ -7,7 +7,8 @@ import { fetchDashboardSummary } from "../lib/data/dashboardData";
 import { useTransactionsRealtime } from "../hooks/useTransactionsRealtime";
 import { fetchRecentTransactionsFromSupabase } from "../lib/data/supabaseQueries";
 import { getAuthenticatedUserId } from "../auth/userContext";
-import { formatWithOriginal } from "../lib/fx/openExchangeRates";
+import { formatWithOriginal, formatMoneyUSD } from "../lib/fx/openExchangeRates";
+import { getBackendClient } from "../lib/api/backendClient";
 
 function statusPillClass(status) {
   if (status === "cleared") return "PillSuccess";
@@ -29,9 +30,37 @@ export default function Dashboard() {
   const refreshSummary = useCallback(async () => {
     try {
       setSummaryState((p) => ({ ...p, loading: true, error: null }));
+
+      const backend = getBackendClient();
+      if (backend) {
+        // Backend provides normalized numbers. Keep UI's existing string KPIs.
+        const res = await backend.analytics.summary();
+        const kpis = res?.kpis;
+
+        const spendUsd = Math.abs(Number(kpis?.expenseTotal ?? 0));
+        // Keep prior UI feel: "budget remaining" + "savings" are still UI-derived until a budgets endpoint exists.
+        const budgetLimit = Math.max(800, Math.round((spendUsd * 1.35 + 500) * 100) / 100);
+        const remaining = Math.max(0, budgetLimit - spendUsd);
+        const savings = Math.max(0, remaining * 0.12);
+
+        setSummaryState({
+          loading: false,
+          error: null,
+          data: {
+            thisMonthSpend: formatMoneyUSD(spendUsd),
+            budgetRemaining: formatMoneyUSD(remaining),
+            savings: `+${formatMoneyUSD(savings)}`,
+            freshnessLabel: "Live",
+            // Backend normalization is authoritative; no FX warnings needed here.
+            fx: { usedFallback: false, warning: null }
+          }
+        });
+        return;
+      }
+
+      // Fallback: existing Supabase aggregation + FX fallback notices.
       const next = await fetchDashboardSummary();
       setSummaryState({ loading: false, error: null, data: next });
-
       if (next?.fx?.usedFallback && next?.fx?.warning) setFxNotice(next.fx.warning);
     } catch (e) {
       setSummaryState({ loading: false, error: e?.message || String(e), data: null });
@@ -41,10 +70,37 @@ export default function Dashboard() {
   const refreshRecent = useCallback(async () => {
     try {
       setRecentState((p) => ({ ...p, loading: true, error: null }));
+
+      const backend = getBackendClient();
+      if (backend) {
+        const res = await backend.transactions.recent({ limit: 6 });
+
+        // Keep table rendering unchanged by mapping backend DTO -> existing row shape.
+        setRecentState({
+          loading: false,
+          error: null,
+          data: (res?.items || []).map((t) => ({
+            id: t.id,
+            date: t.occurredAt,
+            merchant: t.merchant || t.description || "—",
+            category: t.categoryName || "—",
+            status: t.status,
+            currency: t.currency,
+            original_amount: t.amount,
+            // Backend amount is already normalized to its currency; UI expects amount_usd for display.
+            // Since backend currency is "USD" in the spec, this is consistent. If currency differs, we still show "amount" as-is.
+            amount_usd: t.amount
+          })),
+          fx: { usedFallback: false, warning: null }
+        });
+
+        return;
+      }
+
+      // Fallback: existing Supabase query + FX conversion.
       const userId = await getAuthenticatedUserId();
       const res = await fetchRecentTransactionsFromSupabase({ userId, allowDemoUser: true, limit: 6 });
       setRecentState({ loading: false, error: null, data: res.rows || [], fx: res.fx || null });
-
       if (res?.fx?.usedFallback && res?.fx?.warning) setFxNotice(res.fx.warning);
     } catch (e) {
       setRecentState({ loading: false, error: e?.message || String(e), data: [], fx: null });

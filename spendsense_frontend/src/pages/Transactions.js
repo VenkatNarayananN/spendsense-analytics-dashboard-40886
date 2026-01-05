@@ -7,6 +7,7 @@ import { useTransactionsRealtime } from "../hooks/useTransactionsRealtime";
 import { fetchTransactionsPageFromSupabase } from "../lib/data/supabaseQueries";
 import { getAuthenticatedUserId } from "../auth/userContext";
 import { formatWithOriginal } from "../lib/fx/openExchangeRates";
+import { getBackendClient } from "../lib/api/backendClient";
 
 function safeDateLabel(isoOrDate) {
   if (!isoOrDate) return "—";
@@ -59,6 +60,14 @@ export default function Transactions() {
 
   const [fxNotice, setFxNotice] = useState(null);
 
+  const [uploadState, setUploadState] = useState({
+    status: "idle", // idle | ready | uploading | done | error
+    file: /** @type {File|null} */ (null),
+    progress: 0,
+    result: /** @type {any|null} */ (null),
+    error: /** @type {string|null} */ (null)
+  });
+
   const refreshList = useCallback(
     async (opts = {}) => {
       const nextPage = opts.page ?? page;
@@ -92,6 +101,54 @@ export default function Transactions() {
     },
     [filters, page, pageSize]
   );
+
+  const onSelectUploadFile = (file) => {
+    if (!file) {
+      setUploadState({ status: "idle", file: null, progress: 0, result: null, error: null });
+      return;
+    }
+    setUploadState({ status: "ready", file, progress: 0, result: null, error: null });
+  };
+
+  const uploadCsv = useCallback(async () => {
+    const backend = getBackendClient();
+    if (!backend) {
+      setUploadState((p) => ({
+        ...p,
+        status: "error",
+        error: "Backend API is not configured (missing REACT_APP_API_BASE). CSV upload requires the backend."
+      }));
+      return;
+    }
+
+    if (!uploadState.file) {
+      setUploadState((p) => ({ ...p, status: "error", error: "Choose a CSV file to upload." }));
+      return;
+    }
+
+    try {
+      setUploadState((p) => ({ ...p, status: "uploading", progress: 10, error: null, result: null }));
+
+      // Note: fetch doesn't provide upload progress events without XHR; we show a simple staged progress.
+      const t = window.setTimeout(() => setUploadState((p) => ({ ...p, progress: 65 })), 350);
+
+      const res = await backend.transactions.uploadCSV(uploadState.file);
+
+      window.clearTimeout(t);
+      setUploadState((p) => ({ ...p, status: "done", progress: 100, result: res, error: null }));
+
+      // After upload, refetch list + summaries to reflect newly inserted transactions.
+      await refreshAll({ page: 1 });
+    } catch (e) {
+      setUploadState((p) => ({
+        ...p,
+        status: "error",
+        progress: 0,
+        result: null,
+        error: e?.message || String(e)
+      }));
+    }
+  }, [refreshAll, uploadState.file]);
 
   const refreshSummaries = useCallback(async () => {
     try {
@@ -186,6 +243,98 @@ export default function Transactions() {
       </div>
 
       <div className="Grid" style={{ gap: 14 }}>
+        <Card title="Import CSV" subtitle="Upload a transactions CSV (handled by backend validation)">
+          <div style={{ display: "grid", gap: 10 }}>
+            <div style={{ fontSize: 13, opacity: 0.85 }}>
+              Choose a <code>.csv</code> file to import. The backend will validate rows, insert valid transactions, and return per-row errors for
+              invalid records.
+            </div>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                onChange={(e) => onSelectUploadFile(e.target.files?.[0] || null)}
+                aria-label="Upload transactions CSV"
+              />
+
+              <button
+                className="Button ButtonPrimary"
+                type="button"
+                onClick={uploadCsv}
+                disabled={uploadState.status === "uploading" || !uploadState.file}
+              >
+                {uploadState.status === "uploading" ? "Uploading…" : "Upload"}
+              </button>
+
+              <button
+                className="Button"
+                type="button"
+                onClick={() => onSelectUploadFile(null)}
+                disabled={uploadState.status === "uploading"}
+              >
+                Clear
+              </button>
+
+              <div style={{ fontSize: 12, opacity: 0.8 }}>
+                {uploadState.file ? (
+                  <>
+                    Selected: <strong>{uploadState.file.name}</strong>
+                  </>
+                ) : (
+                  <>No file selected</>
+                )}
+              </div>
+            </div>
+
+            {uploadState.status === "uploading" ? (
+              <div className="Skeleton" style={{ height: 10, borderRadius: 999 }}>
+                <div
+                  style={{
+                    height: "100%",
+                    width: `${Math.max(5, Math.min(100, uploadState.progress || 0))}%`,
+                    background: "linear-gradient(90deg, rgba(244,114,182,0.9), rgba(245,158,11,0.85))",
+                    borderRadius: 999
+                  }}
+                />
+              </div>
+            ) : null}
+
+            {uploadState.status === "error" ? (
+              <ErrorState title="Upload failed" message={uploadState.error || "Unknown error"} onRetry={uploadCsv} retryLabel="Try again" />
+            ) : uploadState.status === "done" ? (
+              <div className="Card" style={{ padding: 12, borderRadius: 12, background: "rgba(16,185,129,0.08)" }}>
+                <div style={{ display: "grid", gap: 6 }}>
+                  <div style={{ fontWeight: 700 }}>Import complete</div>
+                  <div style={{ fontSize: 13, opacity: 0.9 }}>
+                    Inserted: <strong>{uploadState.result?.inserted ?? 0}</strong> • Skipped duplicates:{" "}
+                    <strong>{uploadState.result?.skipped_duplicates ?? 0}</strong> • Invalid:{" "}
+                    <strong>{uploadState.result?.invalid ?? 0}</strong>
+                  </div>
+                  {Array.isArray(uploadState.result?.errors) && uploadState.result.errors.length > 0 ? (
+                    <div style={{ marginTop: 6 }}>
+                      <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 6 }}>
+                        Per-row errors (showing up to 8):
+                      </div>
+                      <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+                        {uploadState.result.errors.slice(0, 8).map((er) => (
+                          <li key={er.rowNumber}>
+                            Row {er.rowNumber}: {Array.isArray(er.errors) ? er.errors.join("; ") : String(er.errors || "Invalid")}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
+            <div style={{ fontSize: 12, opacity: 0.7 }}>
+              Note: Upload requires <code>REACT_APP_API_BASE</code> and a signed-in session (Supabase JWT forwarded automatically).
+            </div>
+          </div>
+        </Card>
+
         <FilterBar title="Transaction Filters" filters={filters} onClearAll={onClearAll} onRemoveFilter={onRemoveFilter}>
           <DateRangePicker value={filters.dateRange} onChange={(dateRange) => setFilters((p) => ({ ...p, dateRange }))} />
 

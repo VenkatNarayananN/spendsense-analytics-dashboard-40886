@@ -5,6 +5,8 @@ import { EmptyState, ErrorState, SegmentedControl, SkeletonCard } from "../compo
 import ToastNotice from "../components/ToastNotice";
 import { fetchInsightsSummary } from "../lib/data/dashboardData";
 import { useTransactionsRealtime } from "../hooks/useTransactionsRealtime";
+import { getBackendClient } from "../lib/api/backendClient";
+import { formatMoneyUSD } from "../lib/fx/openExchangeRates";
 
 const TIME_RANGE_OPTIONS = [
   { value: "7d", label: "7d" },
@@ -39,6 +41,40 @@ export default function Insights() {
   const refreshInsights = useCallback(async () => {
     try {
       setState((p) => ({ ...p, loading: true, error: null }));
+
+      const backend = getBackendClient();
+      if (backend) {
+        // Map timeRange -> backend date range (best-effort).
+        const now = new Date();
+        let start = null;
+
+        if (timeRange === "7d") start = new Date(now.getTime() - 7 * 24 * 3600 * 1000);
+        else if (timeRange === "30d") start = new Date(now.getTime() - 30 * 24 * 3600 * 1000);
+        else if (timeRange === "90d") start = new Date(now.getTime() - 90 * 24 * 3600 * 1000);
+        else if (timeRange === "YTD") start = new Date(Date.UTC(now.getUTCFullYear(), 0, 1, 0, 0, 0, 0));
+        else start = new Date(now.getTime() - 30 * 24 * 3600 * 1000);
+
+        const summary = await backend.analytics.summary({ from: start.toISOString(), to: now.toISOString() });
+
+        const spendUsd = Math.abs(Number(summary?.kpis?.expenseTotal ?? 0));
+        const txCount = Number(summary?.kpis?.transactionCount ?? 0);
+
+        setFxNotice(null);
+        setState({
+          loading: false,
+          error: null,
+          data: {
+            timeRange,
+            segment,
+            freshnessLabel: "Live",
+            totalSpend: formatMoneyUSD(spendUsd),
+            txCount,
+            fx: { usedFallback: false, warning: null }
+          }
+        });
+        return;
+      }
+
       const next = await fetchInsightsSummary({ timeRange, segment });
       setState({ loading: false, error: null, data: next });
 
